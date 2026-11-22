@@ -67,8 +67,23 @@ uvicorn server:app --reload
 | 요청 | 설명 |
 | --- | --- |
 | `POST /sessions` | 새 대화 시작. `session_id`와 `opening` 반환 |
-| `POST /sessions/{session_id}/chat` | `{"message": "..."}`를 보내면 `reply` 반환 |
+| `POST /sessions/{session_id}/chat` | `{"message": "..."}`를 보내면 `reply` 반환 (테스트용, SQLite 저장) |
 | `GET /sessions/{session_id}` | 대화 기록과 상태 |
+
+### moti 앱용 API (v2, 상태 없음)
+
+DB 없이 동작합니다. 이야기 상태는 앱(localStorage)이 보관해서 매 요청에 보내고, 서버는 아무것도 저장하지 않습니다.
+
+| 요청 | 보내는 것 | 돌려주는 것 |
+| --- | --- | --- |
+| `POST /chat` | `char`, `message`, `history`(최근 16턴), `state`, `motion_list`(해금된 몸짓, 직전 몸짓 제외) | `{action, dialogue, motion_id, emotion, location}` |
+| `POST /judge` | `char`, `state`, `last_user`, `last_reply`, `need_summary`(6턴마다), `recent`(요약용 최근 대화) | `{state, stage_up, flags, pending_event}` |
+
+- `/chat`은 Gemini에 JSON 응답(스키마)을 강제합니다. 파싱에 실패하면 1번 더 시도하고, 그래도 안 되면 `"…"` 대답을 돌려줍니다. 목록에 없는 `motion_id`, 허용 밖의 `emotion`·`location`은 각각 `null`, `평온`, `null`로 바꿉니다.
+- `/judge`는 판정 후 `engine.py`의 규칙(호감도 상한, 단계 상승, 비밀 공개, 출발일, 사건 발동)을 적용하고, 다음 턴에 쓸 사건을 `state.pending_event`에 넣어 돌려줍니다. 앱은 다음 `/chat`에 그대로 보내고, 응답을 받으면 `null`로 돌립니다.
+- 예전 `/sessions` API와 `play.py`는 테스트용으로 그대로 남아 있습니다 (이쪽만 SQLite를 씁니다).
+
+**앱에서 시험하기:** 서버를 켠 뒤 `https://bii0411.github.io/Moti/?api=http://localhost:8000` 처럼 주소 뒤에 `?api=`를 붙이면 그 서버로 연결됩니다. `LLM_PROVIDER=fake`로 켜면 키 없이도 단계 상승·사건·해금 흐름을 볼 수 있습니다.
 
 `.env`의 `DEBUG=1`이면 응답에 판정 결과와 상태가 함께 나옵니다. 실제 서비스할 때는 `DEBUG=0`으로 바꾸세요.
 

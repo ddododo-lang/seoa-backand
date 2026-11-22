@@ -4,7 +4,7 @@
 - POST /sessions               새 대화 시작 → session_id와 오프닝
 - POST /sessions/{id}/chat     메시지 보내기 → 서아의 응답
 - GET  /sessions/{id}          대화 기록 (DEBUG=1이면 상태도)
-- POST /chat                   moti 프런트엔드(app.js의 askAI)용 주소
+- POST /chat, /judge           moti 프런트엔드용 (상태 없음, 앱이 상태를 보관)
 """
 import inspect
 import os
@@ -78,67 +78,74 @@ def chat(sid: str, body: ChatIn):
     return response
 
 
-# ---------- moti 프런트엔드 연결용 ----------
-# app.js의 askAI()가 보내는 형식을 그대로 받고, 기대하는 형식으로 돌려준다.
+# ---------- moti 프런트엔드 연결용 (상태 없음) ----------
+# 상태는 앱(localStorage)이 보관하고 매 요청에 보낸다. 서버는 아무것도 저장하지 않는다.
+#   POST /chat  : 서아 응답만 바로 만든다 → {action, dialogue, motion_id, emotion, location}
+#   POST /judge : 판정·단계 상승·사건 결정 → {state, stage_up, flags, pending_event}
 SUPPORTED_CHARS = {"seoa"}  # 지금은 서아만 연결. 다른 캐릭터는 404 → 프런트가 미리 써 둔 대사로 대답
 
-SCENE_RULES = [  # 판정 모델이 알려 준 장소 → 프런트엔드 배경 이름
-    (("옥상", "하늘", "루프"), "옥상"),
-    (("비", "빗"), "비"),
-    (("골목", "거리", "밖"), "골목"),
-]
+
+class Turn(BaseModel):
+    model_config = {"extra": "ignore"}
+    r: str
+    t: str = ""
+
+
+class Motion(BaseModel):
+    model_config = {"extra": "ignore"}
+    id: str
+    name: str = ""
+    emo: str = ""
 
 
 class FrontChatIn(BaseModel):
     model_config = {"extra": "ignore"}
     char: str
     message: str = Field(min_length=1, max_length=1000)
-    session_id: str | None = None
-    scenes: list[str] | None = None
+    history: list[Turn] = []
+    state: dict = {}
+    motion_list: list[Motion] = []
 
 
-def pick_scene(location: str, scenes: list[str] | None) -> str | None:
-    if not location or not scenes:
-        return None
-    for keywords, key in SCENE_RULES:
-        if any(k in location for k in keywords):
-            for name in scenes:
-                if key in name:
-                    return name
-    return None
+class JudgeIn(BaseModel):
+    model_config = {"extra": "ignore"}
+    char: str
+    state: dict = {}
+    last_user: str = Field(default="", max_length=1000)
+    last_reply: str = Field(default="", max_length=2000)
+    need_summary: bool = False
+    recent: list[Turn] = []  # need_summary일 때 요약에 쓸 최근 대화
+
+
+def check_char(char: str) -> None:
+    if char not in SUPPORTED_CHARS:
+        raise HTTPException(404, f"{char} 캐릭터는 아직 서버에 연결되지 않았습니다.")
 
 
 @app.post("/chat")
 def front_chat(body: FrontChatIn):
-    if body.char not in SUPPORTED_CHARS:
-        raise HTTPException(404, f"{body.char} 캐릭터는 아직 서버에 연결되지 않았습니다.")
-
-    sid = body.session_id
-    if not sid or engine.store.get_state(sid) is None:
-        sid, _ = engine.start_session()  # 처음이거나 세션이 사라졌으면 새로 시작
-
+    check_char(body.char)
     try:
-        result = engine.chat(sid, body.message)
-    except Exception as e:
+        return engine.reply(
+            body.state,
+            body.message,
+            [t.model_dump() for t in body.history],
+            [m.model_dump() for m in body.motion_list],
+        )
+    except Exception as e:  # LLM 호출 실패 (한도 초과, 네트워크 등)
         raise HTTPException(502, f"응답 생성에 실패했습니다: {type(e).__name__}")
 
-    judge, changes, state = result["judge"], result["changes"], result["state"]
-    stage_up = any(c.startswith("단계 상승") for c in changes)
-    key_moment = min(60, max(0, judge["affection_delta"]) * 5 + (30 if stage_up else 0))
 
-    response = {
-        "session_id": sid,
-        "reply": result["reply"],
-        "key_moment": key_moment,          # 0~60. 프런트의 '결정적 순간' 게이지에 쓰임
-        "scene": pick_scene(judge["location"], body.scenes),
-        "emotion": None,
-        "motions": [],                     # 비워 두면 프런트가 모션을 알아서 고름
-        "stage": state["stage"],
-        "affection": state["affection"],
-        "ending": state["ending"],
-    }
+@app.post("/judge")
+def front_judge(body: JudgeIn):
+    check_char(body.char)
+    result = engine.judge(
+        body.state, body.last_user, body.last_reply,
+        need_summary=body.need_summary, recent=[t.model_dump() for t in body.recent],
+    )
+    response = {k: result[k] for k in ("state", "stage_up", "flags", "pending_event")}
     if DEBUG:
-        response.update(event=result["event"], judge=judge, changes=changes)
+        response.update(judge=result["judge"], changes=result["changes"])
     return response
 
 

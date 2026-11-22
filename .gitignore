@@ -1,0 +1,4 @@
+.env
+seoa.db
+__pycache__/
+.venv/

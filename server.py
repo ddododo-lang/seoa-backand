@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from db import Store
-from engine import Engine
+from engine import Engine, to_text
 from llm import make_llm
 
 BASE_DIR = Path(__file__).parent
@@ -80,7 +80,8 @@ def chat(sid: str, body: ChatIn):
 
 # ---------- moti 프런트엔드 연결용 (상태 없음) ----------
 # 상태는 앱(localStorage)이 보관하고 매 요청에 보낸다. 서버는 아무것도 저장하지 않는다.
-#   POST /chat  : 서아 응답만 바로 만든다 → {action, dialogue, motion_id, emotion, location}
+#   POST /chat  : 서아 응답만 바로 만든다 → {action, dialogue, motion_id, emotion, location, reply}
+#                 reply는 예전 형식 "*action* dialogue" (action이 없으면 dialogue만)
 #   POST /judge : 판정·단계 상승·사건 결정 → {state, stage_up, flags, pending_event}
 SUPPORTED_CHARS = {"seoa"}  # 지금은 서아만 연결. 다른 캐릭터는 404 → 프런트가 미리 써 둔 대사로 대답
 
@@ -126,12 +127,15 @@ def check_char(char: str) -> None:
 def front_chat(body: FrontChatIn):
     check_char(body.char)
     try:
-        return engine.reply(
+        result = engine.reply(
             body.state,
             body.message,
             [t.model_dump() for t in body.history],
             [m.model_dump() for m in body.motion_list],
         )
+        # 예전 앱 호환: 마이 페이지 「이전 버전(v1) 보기」가 읽는 필드
+        result["reply"] = to_text(result)
+        return result
     except Exception as e:  # LLM 호출 실패 (한도 초과, 네트워크 등)
         raise HTTPException(502, f"응답 생성에 실패했습니다: {type(e).__name__}")
 

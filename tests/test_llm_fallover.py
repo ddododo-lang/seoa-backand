@@ -221,6 +221,14 @@ class ModelListTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CHAT_MODELS": " a , b,,a ", "CHAT_MODEL": "x"}):
             self.assertEqual(llm_mod.model_list("CHAT_MODELS", "CHAT_MODEL", "d"), ["a", "b"])
 
+    def test_fallback_model_from_main_is_appended(self):
+        """main에 있던 FALLBACK_MODEL 설정도 계속 동작한다 (목록 끝에 예비 모델)."""
+        env = {"CHAT_MODEL": "lite-a", "FALLBACK_MODEL": "lite-b"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            llm = GeminiLLM(client=object())
+        self.assertEqual(llm.chat_models, ["lite-a", "lite-b"])
+        self.assertEqual(llm.judge_models, ["gemini-3.5-flash-lite", "lite-b"])
+
     def test_single_model_when_list_missing(self):
         with mock.patch.dict(os.environ, {"CHAT_MODEL": "x"}, clear=True):
             self.assertEqual(llm_mod.model_list("CHAT_MODELS", "CHAT_MODEL", "d"), ["x"])

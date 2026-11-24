@@ -10,8 +10,9 @@ Google이 바쁠 때(503·429·시간 초과) 대비
 - 503(과부하)이면 같은 모델로 1초, 2초 쉬고 최대 2번 다시 시도한다.
   429(한도 초과)·시간 초과는 같은 모델을 기다려도 소용없어서 바로 다음 모델로 넘긴다.
 - 그래도 안 되면 .env의 CHAT_MODELS / JUDGE_MODELS(쉼표로 구분) 순서대로 다음 모델로 넘어간다.
-  값이 없으면 CHAT_MODEL / JUDGE_MODEL 하나만 쓴다. 404(없는 모델)는 다시 시도하지 않고 바로 넘긴다.
-- 한 번의 요청은 LLM_BUDGET_SEC(기본 15초) 안에서 끝낸다. 모두 실패하면 LLMUnavailable을 던지고,
+  값이 없으면 CHAT_MODEL / JUDGE_MODEL 하나만 쓴다(기본 gemini-3.5-flash-lite). FALLBACK_MODEL이 있으면 목록 끝에 붙인다.
+  404(없는 모델)는 다시 시도하지 않고 바로 넘긴다.
+- 한 번의 요청은 LLM_BUDGET_SEC(= LLM_TOTAL_TIMEOUT, 기본 15초) 안에서 끝낸다. 호출 한 번은 LLM_CALL_TIMEOUT(기본 8초). 모두 실패하면 LLMUnavailable을 던지고,
   엔진이 대체 응답(FALLBACK)을 쓴다.
 - 어느 모델로 답했는지 로그에 한 줄 남긴다 (키는 찍지 않는다).
 """
@@ -24,11 +25,21 @@ from collections import Counter
 
 FALLBACK_REPLY = "*서아가 잠시 말없이 잔 테두리를 손끝으로 훑는다.* …방금 뭐라고 했어, 사장님. 다시 말해 봐."
 
-BUDGET_SEC = float(os.getenv("LLM_BUDGET_SEC", "15"))  # 요청 하나가 기다리는 최대 시간
-ATTEMPT_TIMEOUT_SEC = 8.0     # 호출 한 번이 이보다 오래 걸리면 끊고 다음 모델로
-SERVER_DEADLINE_SEC = 15      # Google에 알려 주는 기한 (Google은 10초 미만을 거부한다)
+def _env_float(names: tuple[str, ...], default: float) -> float:
+    for name in names:
+        try:
+            return float(os.environ[name])
+        except (KeyError, ValueError):
+            continue
+    return default
+
+
+# main에 올라왔던 이름(LLM_TOTAL_TIMEOUT, LLM_CALL_TIMEOUT)도 그대로 읽는다
+BUDGET_SEC = _env_float(("LLM_BUDGET_SEC", "LLM_TOTAL_TIMEOUT"), 15)  # 요청 하나가 기다리는 최대 시간
+ATTEMPT_TIMEOUT_SEC = _env_float(("LLM_CALL_TIMEOUT",), 8)          # 호출 한 번이 이보다 오래 걸리면 끊고 다음 모델로
+SERVER_DEADLINE_SEC = max(10, int(BUDGET_SEC + 0.999))  # Google에 알려 주는 기한 (Google은 10초 미만을 거부한다)
 RETRY_DELAYS = (1, 2)         # 같은 모델로 다시 시도하기 전에 쉬는 시간(초)
-RETRY_CODES = {503}           # 과부하 → 같은 모델로 다시 시도
+RETRY_CODES = {500, 502, 503}  # 구글 서버 오류·과부하 → 같은 모델로 다시 시도
 QUOTA_CODES = {429}           # 한도 초과 → 기다려도 안 풀리니 바로 다음 모델
 TIMEOUT_CODES = {408, 504}    # 시간 초과 → 바로 다음 모델
 SKIP_CODES = {404}            # 없는 모델 → 바로 다음 모델
@@ -90,8 +101,13 @@ class GeminiLLM:
         self.client = client
         self._sleep = sleep
         self._clock = clock
-        self.chat_models = model_list("CHAT_MODELS", "CHAT_MODEL", "gemini-2.5-flash")
-        self.judge_models = model_list("JUDGE_MODELS", "JUDGE_MODEL", "gemini-2.5-flash-lite")
+        self.chat_models = model_list("CHAT_MODELS", "CHAT_MODEL", "gemini-3.5-flash-lite")
+        self.judge_models = model_list("JUDGE_MODELS", "JUDGE_MODEL", "gemini-3.5-flash-lite")
+        # main에 올라왔던 FALLBACK_MODEL(예비 모델 하나)도 목록 끝에 붙여 준다. 비우면 안 붙음
+        fallback = os.getenv("FALLBACK_MODEL", "").strip()
+        for models in (self.chat_models, self.judge_models):
+            if fallback and fallback not in models:
+                models.append(fallback)
         self.chat_model = self.chat_models[0]
         self.judge_model = self.judge_models[0]
         self.stats = Counter()  # chat_fallover, judge_fallover, chat_unavailable, judge_unavailable

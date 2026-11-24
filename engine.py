@@ -1,12 +1,19 @@
-"""대화 엔진. 한 턴마다 프롬프트 조립 → 서아 응답 → 판정 → 상태 갱신 → 저장을 한다.
+"""대화 엔진.
+
+두 가지 방식으로 쓸 수 있다.
+- 상태 없는 방식 (moti 앱): reply()로 서아 응답만 만들고, judge()로 판정·상태 갱신을 한다.
+  상태는 클라이언트가 보관해서 매 요청에 보내고, 서버는 아무것도 저장하지 않는다.
+- 세션 방식 (play.py, /sessions): chat()이 위 두 단계를 묶어서 SQLite에 저장한다.
 
 게임 규칙(단계 조건, 호감도 상한, 사건 목록)은 맨 위 상수에서 바꾸면 된다.
 """
 import json
 import random
 import re
+import time
 
 from db import Store
+from llm import BUDGET_SEC, LLMUnavailable
 from prompt_loader import load_blocks, render
 
 # ---------- 게임 규칙 (여기서 조정) ----------
@@ -20,7 +27,22 @@ STAGE_EVENTS = {
     5: ["TAEO"],
     6: ["MARI", "STORM", "DATE", "ROOFTOP", "BLACKOUT", "INJURY", "TAEO"],
 }
-ALLOWED_FLAGS = {"care", "protect", "outside", "sincere", "pursue", "reveal_secret1"}
+ALLOWED_FLAGS = {"care", "protect", "outside", "sincere", "pursue", "tease", "comfort", "reveal_secret1"}
+LOCATIONS = ["바 '라스트 오더' 1층", "바 '라스트 오더' 2층", "네온 골목", "비 내리는 골목", "바 옥상"]
+EMOTIONS = {"평온", "기쁨", "도발", "장난", "진심", "설렘", "수줍음", "놀람", "슬픔", "분노", "질투", "당황"}
+HISTORY_MESSAGES = 32       # 대화 호출에 넣을 최근 기록 (16턴 = 유저 16 + 서아 16)
+FALLBACK = {"action": None, "dialogue": "…", "motion_id": None, "emotion": "평온", "location": None}
+REPLY_SCHEMA = {  # Gemini 응답 스키마 (OUTPUT_FORMAT과 같은 모양)
+    "type": "OBJECT",
+    "properties": {
+        "action": {"type": "STRING", "nullable": True},
+        "dialogue": {"type": "STRING"},
+        "motion_id": {"type": "STRING", "nullable": True},
+        "emotion": {"type": "STRING"},
+        "location": {"type": "STRING", "nullable": True},
+    },
+    "required": ["action", "dialogue", "motion_id", "emotion", "location"],
+}
 SHORT_MESSAGE_LEN = 20      # 이보다 짧은 유저 메시지는 '짧은 답'
 SHORT_STREAK_TRIGGER = 3    # 짧은 답이 이만큼 연속되면 사건 발동
 QUIET_TURNS_TRIGGER = 15    # 사건 없이 이만큼 지나면 사건 발동
@@ -52,9 +74,51 @@ def new_state() -> dict:
         "turns_since_event": 0,
         "used_events": {},        # 사건 이름 -> 마지막으로 쓴 턴
         "pending_event": None,    # 다음 턴에 반드시 넣을 사건
-        "summarized_upto": 0,     # 이 메시지 id까지는 요약에 들어감
+        "summarized_upto": 0,     # 이 메시지 id까지는 요약에 들어감 (세션 방식에서만 씀)
         "ending": None,           # None | "lovers" | "departed"
+        "recent_lines": [],       # 직전 서아 응답 3개 (반복 방지)
     }
+
+
+def normalize_state(raw: dict | None) -> dict:
+    """클라이언트가 보낸 상태를 믿을 수 있는 모양으로 맞춘다. 빠진 값은 기본값으로 채운다."""
+    state = new_state()
+    if not isinstance(raw, dict):
+        return state
+    for key, default in state.items():
+        if key not in raw or raw[key] is None and default is not None:
+            continue
+        value = raw[key]
+        if isinstance(default, bool) or default is None:
+            state[key] = value
+        elif isinstance(default, int):
+            try:
+                state[key] = int(value)
+            except (TypeError, ValueError):
+                pass
+        elif isinstance(default, type(value)):
+            state[key] = value
+    state["stage"] = max(1, min(6, state["stage"]))
+    state["affection"] = max(0, min(100, state["affection"]))
+    if state["location"] not in LOCATIONS:
+        state["location"] = LOCATIONS[0]
+    ev = state["pending_event"]
+    if isinstance(ev, str):
+        ev = ev.removeprefix("EVENT_")
+        state["pending_event"] = ev if ev in {e for v in STAGE_EVENTS.values() for e in v} | {"DEPARTURE"} else None
+    else:
+        state["pending_event"] = None
+    state["recent_lines"] = [str(x) for x in state["recent_lines"]][-3:]
+    state["stage_flags"] = [f for f in state["stage_flags"] if f in ALLOWED_FLAGS]
+    if not isinstance(state["used_events"], dict):
+        state["used_events"] = {}
+    return state
+
+
+def to_text(reply: dict) -> str:
+    """JSON 응답을 '*행동* 대사' 글로 바꾼다 (세션 방식 저장, 대화 기록용)."""
+    action = (reply.get("action") or "").strip()
+    return (f"*{action}* " if action else "") + (reply.get("dialogue") or "").strip()
 
 
 class Engine:
@@ -77,22 +141,113 @@ class Engine:
             raise KeyError("세션이 없습니다.")
         user_message = user_message.strip()
 
-        event = self._pick_event(state, user_message)
-        system = self._build_system(state, event)
+        event = state["pending_event"]
         history = self.store.messages_after(sid, state["summarized_upto"])
-        messages = self._to_llm_messages(history) + [{"role": "user", "content": user_message}]
-
-        reply = self.llm.chat(system, messages)  # 실패하면 예외 → 아무것도 저장하지 않음
+        history = [{"r": "u" if m["role"] == "user" else "c", "t": m["content"]} for m in history]
+        parsed = self.reply(state, user_message, history, [])  # 실패하면 예외 → 아무것도 저장하지 않음
+        reply = to_text(parsed)
 
         self.store.add_message(sid, "user", user_message)
         self.store.add_message(sid, "assistant", reply)
 
-        judge = self._judge(state, user_message, reply)
-        changes = self._apply(state, judge, event)
+        state["pending_event"] = None
+        if parsed["location"]:
+            state["location"] = parsed["location"]
+        state["recent_lines"] = (state.get("recent_lines", []) + [reply])[-3:]
+        result = self.judge(state, user_message, reply, need_summary=False)
+        state = result["state"]
         self._maybe_summarize(sid, state)
         self.store.save_state(sid, state)
 
-        return {"reply": reply, "event": event, "judge": judge, "changes": changes, "state": state}
+        return {"reply": reply, "parsed": parsed, "event": event, "judge": result["judge"],
+                "changes": result["changes"], "state": state}
+
+    # ---------- 상태 없는 방식: 서아 응답 ----------
+    def reply(self, state: dict, user_message: str, history: list[dict], motion_list: list[dict]) -> dict:
+        """서아 응답 하나를 JSON으로 만들어 검증한다. state는 바꾸지 않는다.
+
+        history: [{"r": "u"|"c", "t": "..."}] 최근 기록. motion_list: [{"id", "name", "emo"}].
+        """
+        state = normalize_state(state)
+        event = state["pending_event"]
+        system = self._build_system(state, event, motion_list)
+        opening = self.blocks["OPENING"].strip()
+        msgs = [{"role": "assistant", "content": opening}]  # OPENING은 모델이 만들지 않고 고정
+        for m in history[-HISTORY_MESSAGES:]:
+            text = str(m.get("t") or "").strip()
+            if not text or text == opening or m.get("r") not in ("u", "c"):
+                continue
+            msgs.append({"role": "user" if m["r"] == "u" else "assistant", "content": text})
+        messages = self._to_llm_messages(msgs) + [{"role": "user", "content": user_message.strip()}]
+
+        ids = {str(m.get("id")) for m in motion_list if isinstance(m, dict)}
+        start = time.monotonic()
+        for _ in range(2):  # 파싱 실패하면 1번 더 (두 번 합쳐 BUDGET_SEC 안에서)
+            remaining = BUDGET_SEC - (time.monotonic() - start)
+            if remaining < 1:
+                break
+            try:
+                raw = self.llm.chat_json(system, messages, REPLY_SCHEMA, budget_sec=remaining)
+            except LLMUnavailable:  # 모든 모델이 바쁨 → 바로 대체 응답
+                break
+            data = self._parse_json(raw)
+            if data and str(data.get("dialogue") or "").strip():
+                return self._validate_reply(data, ids)
+        return dict(FALLBACK)
+
+    @staticmethod
+    def _parse_json(raw: str) -> dict | None:
+        if not raw:
+            return None
+        match = re.search(r"\{.*\}", raw, re.S)
+        try:
+            data = json.loads(match.group(0)) if match else None
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, dict) else None
+
+    @staticmethod
+    def _validate_reply(data: dict, ids: set[str]) -> dict:
+        def clean(x):
+            x = str(x or "").strip().strip("*").strip()
+            return x or None
+
+        mid = data.get("motion_id")
+        emotion = str(data.get("emotion") or "").strip()
+        location = str(data.get("location") or "").strip()
+        dialogue = clean(data.get("dialogue")) or "…"
+        if len(dialogue) >= 2 and dialogue[0] in "\"“" and dialogue[-1] in "\"”":
+            dialogue = dialogue[1:-1].strip()
+        return {
+            "action": clean(data.get("action")),
+            "dialogue": dialogue,
+            "motion_id": mid if isinstance(mid, str) and mid in ids else None,
+            "emotion": emotion if emotion in EMOTIONS else "평온",
+            "location": location if location in LOCATIONS else None,
+        }
+
+    # ---------- 상태 없는 방식: 판정 ----------
+    def judge(self, state: dict, last_user: str, last_reply: str,
+              need_summary: bool = False, recent: list[dict] | None = None) -> dict:
+        """판정 호출 → 규칙 적용 → 다음 턴 사건 결정. 갱신된 state를 돌려준다."""
+        state = normalize_state(state)
+        stage_before = state["stage"]
+        judge = self._judge(state, last_user, last_reply, need_summary, recent or [])
+        changes = self._apply(state, judge, None)
+        if need_summary and judge["summary"]:
+            state["summary"] = judge["summary"]
+            changes.append("요약 갱신")
+        nxt_event = self._tick_events(state, last_user)
+        if nxt_event:
+            changes.append(f"다음 턴 사건: {nxt_event}")
+        return {
+            "state": state,
+            "stage_up": state["stage"] > stage_before,
+            "flags": judge["flags"],
+            "pending_event": state["pending_event"],
+            "judge": judge,
+            "changes": changes,
+        }
 
     # ---------- 프롬프트 조립 ----------
     def _values(self, state: dict) -> dict:
@@ -107,14 +262,22 @@ class Engine:
             "revealed_secrets": ", ".join(state["revealed_secrets"]) or "없음",
             "departure_days_left": "-" if days is None else days,
             "summary": state["summary"] or "아직 없음 (이야기의 시작)",
+            "recent_lines": "\n".join(f"- {x}" for x in state.get("recent_lines", [])[-3:]) or "- 없음",
         }
 
-    def _build_system(self, state: dict, event: str | None) -> str:
+    def _build_system(self, state: dict, event: str | None, motion_list: list[dict] | None = None) -> str:
         values = self._values(state)
+        lines = [
+            f"{m.get('id')} {m.get('name')} ({m.get('emo')})"
+            for m in (motion_list or []) if isinstance(m, dict) and m.get("id")
+        ]
+        values["motion_list"] = "\n".join(lines) or "(지금은 없음. motion_id는 null)"
         parts = [
             self.blocks["BASE_SYSTEM"],
             render(self.blocks["STATE_BLOCK"], values),
             render(self.blocks[f"STAGE_{state['stage']}"], values),
+            render(self.blocks["MOTION_BLOCK"], values),
+            self.blocks["OUTPUT_FORMAT"],
         ]
         if event and f"EVENT_{event}" in self.blocks:
             parts.append(self.blocks[f"EVENT_{event}"])
@@ -129,46 +292,52 @@ class Engine:
         return msgs
 
     # ---------- 사건 ----------
-    def _pick_event(self, state: dict, user_message: str) -> str | None:
+    def _tick_events(self, state: dict, user_message: str) -> str | None:
+        """턴을 세고, 사건 발동 조건이 맞으면 다음 턴에 쓸 사건을 pending_event에 넣는다."""
         state["turn"] += 1
         state["turns_since_event"] += 1
-        if len(user_message) < SHORT_MESSAGE_LEN:
+        if len(user_message.strip()) < SHORT_MESSAGE_LEN:
             state["short_streak"] += 1
         else:
             state["short_streak"] = 0
 
-        if state["pending_event"]:
-            event, state["pending_event"] = state["pending_event"], None
-        elif state["ending"]:
-            return None
-        elif (
-            state["short_streak"] >= SHORT_STREAK_TRIGGER
-            or state["turns_since_event"] >= QUIET_TURNS_TRIGGER
+        if state["pending_event"] or state["ending"]:
+            return None  # 이미 예약된 사건(DEPARTURE 등)이 있거나 엔딩 이후
+        if (
+            state["short_streak"] < SHORT_STREAK_TRIGGER
+            and state["turns_since_event"] < QUIET_TURNS_TRIGGER
         ):
-            candidates = [
-                e for e in STAGE_EVENTS[state["stage"]]
-                if state["turn"] - state["used_events"].get(e, -10_000) >= EVENT_COOLDOWN
-            ]
-            if not candidates:
-                return None
-            event = random.choice(candidates)
-        else:
             return None
-
+        candidates = [
+            e for e in STAGE_EVENTS[state["stage"]]
+            if state["turn"] - state["used_events"].get(e, -10_000) >= EVENT_COOLDOWN
+        ]
+        if not candidates:
+            return None
+        event = random.choice(candidates)
+        state["pending_event"] = event
         state["used_events"][event] = state["turn"]
         state["short_streak"] = 0
         state["turns_since_event"] = 0
         return event
 
     # ---------- 판정 ----------
-    def _judge(self, state: dict, user_message: str, reply: str) -> dict:
+    def _judge(self, state: dict, user_message: str, reply: str,
+               need_summary: bool = False, recent: list[dict] | None = None) -> dict:
         prompt = (
             f"[현재 상태]\n단계: {state['stage']} ({STAGE_NAMES[state['stage']]}), "
             f"호감도: {state['affection']}, {state['day']}일째 {state['time_of_day']}, "
-            f"장소: {state['location']}\n\n[유저]\n{user_message}\n\n[서아]\n{reply}"
+            f"장소: {state['location']}\n\n[지금까지의 요약]\n{state['summary'] or '없음'}"
         )
+        if need_summary:
+            convo = "\n".join(
+                f"{'유저' if m.get('r') == 'u' else '서아'}: {m.get('t')}"
+                for m in (recent or [])[-24:] if m.get("r") in ("u", "c")
+            )
+            prompt += f"\n\n[요약 요청]\n기존 요약과 아래 최근 대화를 합쳐 summary를 채운다.\n[최근 대화]\n{convo or '없음'}"
+        prompt += f"\n\n[유저]\n{user_message}\n\n[서아]\n{reply}"
         neutral = {"affection_delta": 0, "flags": [], "time_advance": False,
-                   "location": "", "time_of_day": "", "reason": "판정 실패"}
+                   "time_of_day": "", "summary": "", "reason": "판정 실패"}
         try:
             raw = self.llm.complete(self.blocks["JUDGE_SYSTEM"], prompt, json_mode=True)
             match = re.search(r"\{.*\}", raw, re.S)
@@ -185,8 +354,8 @@ class Engine:
             "affection_delta": max(-10, min(10, delta)),
             "flags": [f for f in flags if f in ALLOWED_FLAGS] if isinstance(flags, list) else [],
             "time_advance": bool(data.get("time_advance", False)),
-            "location": str(data.get("location") or "").strip(),
             "time_of_day": str(data.get("time_of_day") or "").strip(),
+            "summary": str(data.get("summary") or "").strip(),
             "reason": str(data.get("reason", "")),
         }
 
@@ -204,8 +373,6 @@ class Engine:
             if flag not in state["stage_flags"]:
                 state["stage_flags"].append(flag)
 
-        if judge["location"]:
-            state["location"] = judge["location"]
         if judge["time_of_day"]:
             state["time_of_day"] = judge["time_of_day"]
 

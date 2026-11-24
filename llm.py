@@ -7,7 +7,8 @@
 messages 형식: [{"role": "user" | "assistant", "content": "..."}]
 
 Google이 바쁠 때(503·429·시간 초과) 대비
-- 같은 모델로 1초, 2초 쉬고 최대 2번 다시 시도한다. 시간 초과는 같은 모델을 기다리지 않고 바로 다음 모델로 넘긴다.
+- 503(과부하)이면 같은 모델로 1초, 2초 쉬고 최대 2번 다시 시도한다.
+  429(한도 초과)·시간 초과는 같은 모델을 기다려도 소용없어서 바로 다음 모델로 넘긴다.
 - 그래도 안 되면 .env의 CHAT_MODELS / JUDGE_MODELS(쉼표로 구분) 순서대로 다음 모델로 넘어간다.
   값이 없으면 CHAT_MODEL / JUDGE_MODEL 하나만 쓴다. 404(없는 모델)는 다시 시도하지 않고 바로 넘긴다.
 - 한 번의 요청은 LLM_BUDGET_SEC(기본 15초) 안에서 끝낸다. 모두 실패하면 LLMUnavailable을 던지고,
@@ -27,7 +28,8 @@ BUDGET_SEC = float(os.getenv("LLM_BUDGET_SEC", "15"))  # 요청 하나가 기다
 ATTEMPT_TIMEOUT_SEC = 8.0     # 호출 한 번이 이보다 오래 걸리면 끊고 다음 모델로
 SERVER_DEADLINE_SEC = 15      # Google에 알려 주는 기한 (Google은 10초 미만을 거부한다)
 RETRY_DELAYS = (1, 2)         # 같은 모델로 다시 시도하기 전에 쉬는 시간(초)
-RETRY_CODES = {429, 503}      # 과부하·한도 → 같은 모델로 다시 시도
+RETRY_CODES = {503}           # 과부하 → 같은 모델로 다시 시도
+QUOTA_CODES = {429}           # 한도 초과 → 기다려도 안 풀리니 바로 다음 모델
 TIMEOUT_CODES = {408, 504}    # 시간 초과 → 바로 다음 모델
 SKIP_CODES = {404}            # 없는 모델 → 바로 다음 모델
 
@@ -58,6 +60,8 @@ def _failure_kind(e: Exception) -> tuple[str, str] | None:
     if isinstance(code, int):
         if code in RETRY_CODES:
             return "retry", str(code)
+        if code in QUOTA_CODES:
+            return "next", f"{code} 한도"
         if code in TIMEOUT_CODES:
             return "next", f"{code} 시간 초과"
         if code in SKIP_CODES:

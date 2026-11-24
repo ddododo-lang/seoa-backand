@@ -3,6 +3,7 @@
 실행 (가상 환경을 켜고, .env에 GEMINI_API_KEY와 LLM_PROVIDER=gemini가 있어야 함):
     python eval_chat.py            # 12턴
     python eval_chat.py --turns 20
+    python eval_chat.py --pause 20  # 턴 사이 20초 쉬기 (실제 사람처럼, 한도에 덜 걸림)
 
 앱과 같은 방식(상태 없는 /chat → /judge)으로 엔진을 직접 호출한다. 서버를 켤 필요는 없다.
 대화 전문은 eval_result.md에 저장된다.
@@ -70,6 +71,8 @@ USER_LINES = [
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--turns", type=int, default=12)
+    ap.add_argument("--pause", type=float, default=0,
+                    help="턴 사이 쉬는 시간(초). 실제 사람이 메시지를 쓰는 간격처럼 재려면 20 정도")
     args = ap.parse_args()
 
     llm = make_llm()
@@ -95,8 +98,10 @@ def main():
     rows = []
     chat_models = getattr(llm, "chat_models", [type(llm).__name__])
     judge_models = getattr(llm, "judge_models", [type(llm).__name__])
-    print(f"대화 모델: {' → '.join(chat_models)} / 판정 모델: {' → '.join(judge_models)} / {args.turns}턴\n")
+    print(f"대화 모델: {' → '.join(chat_models)} / 판정 모델: {' → '.join(judge_models)} / {args.turns}턴 / 턴 사이 {args.pause:g}초\n")
     for turn in range(args.turns):
+        if turn and args.pause > 0:
+            time.sleep(args.pause)
         user = USER_LINES[turn % len(USER_LINES)]
         st_stage = state.get("stage", 1)
         unlocked = {m for k in range(1, st_stage + 1) for m in STAGE_UNLOCK[k]} | owned

@@ -104,13 +104,22 @@ class FalloverTest(unittest.TestCase):
         self.assertEqual(reply["dialogue"], "왔어, 사장님.")
         self.assertEqual(client.calls[-1], "model-b")
 
-    def test_429_retries_same_model(self):
+    def test_503_then_success_stays_on_same_model(self):
         llm, client, clock = make_llm(
-            {"model-a": [api_error(429), GOOD]}, ["model-a", "model-b"])
+            {"model-a": [api_error(503), GOOD]}, ["model-a", "model-b"])
         llm.chat_json("system", [{"role": "user", "content": "안녕"}], {})
         self.assertEqual(client.calls, ["model-a", "model-a"])
         self.assertEqual(clock.sleeps, [1])
         self.assertEqual(llm.stats["chat_fallover"], 0)
+
+    def test_429_goes_straight_to_next_model(self):
+        """한도 초과(429)는 기다려도 안 풀리니 쉬지 않고 바로 다음 모델로."""
+        llm, client, clock = make_llm(
+            {"model-a": [api_error(429)], "model-b": [GOOD]}, ["model-a", "model-b"])
+        llm.chat_json("system", [{"role": "user", "content": "안녕"}], {})
+        self.assertEqual(client.calls, ["model-a", "model-b"])
+        self.assertEqual(clock.sleeps, [])
+        self.assertEqual(llm.stats["chat_fallover"], 1)
 
     def test_timeout_goes_straight_to_next_model(self):
         llm, client, clock = make_llm(

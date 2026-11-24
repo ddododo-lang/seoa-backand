@@ -404,7 +404,7 @@ class Engine:
     @staticmethod
     def _next_stage(state: dict) -> int | None:
         st, aff, flags = state["stage"], state["affection"], set(state["stage_flags"])
-        if st == 1 and aff >= 20 and flags & {"care", "protect"}:
+        if st == 1 and aff >= 10 and flags & {"care", "protect"}:  # 첫날 안에 한 번 오르게 (앱과 같은 기준)
             return 2
         if st == 2 and aff >= 40 and "outside" in flags:
             return 3

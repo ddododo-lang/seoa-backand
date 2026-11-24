@@ -76,9 +76,13 @@ def main():
     raw_log = []  # 대화 호출 원문 (재시도 포함)
     orig = llm.chat_json
 
-    def spy(system, messages, schema):
+    def spy(system, messages, schema, **kw):
         t0 = time.time()
-        out = orig(system, messages, schema)
+        try:
+            out = orig(system, messages, schema, **kw)
+        except Exception:
+            raw_log.append({"raw": "", "sec": time.time() - t0})
+            raise
         raw_log.append({"raw": out, "sec": time.time() - t0})
         return out
 
@@ -89,7 +93,9 @@ def main():
     state, history, last_motion = {}, [], None
     owned = set()
     rows = []
-    print(f"모델: {getattr(llm, 'chat_model', type(llm).__name__)} / {args.turns}턴\n")
+    chat_models = getattr(llm, "chat_models", [type(llm).__name__])
+    judge_models = getattr(llm, "judge_models", [type(llm).__name__])
+    print(f"대화 모델: {' → '.join(chat_models)} / 판정 모델: {' → '.join(judge_models)} / {args.turns}턴\n")
     for turn in range(args.turns):
         user = USER_LINES[turn % len(USER_LINES)]
         st_stage = state.get("stage", 1)
@@ -135,7 +141,7 @@ def main():
         print(f"     몸짓 {reply['motion_id']} · 감정 {reply['emotion']} · 장소 {reply['location']} · "
               f"단계 {state['stage']} 호감 {state['affection']} · {chat_sec:.1f}초\n")
 
-    report(rows, state)
+    report(rows, state, getattr(llm, "stats", {}))
 
 
 def starts(text: str) -> str:
@@ -147,7 +153,7 @@ def ngrams(text: str, n: int = 3) -> set[str]:
     return {" ".join(words[i:i + n]) for i in range(len(words) - n + 1)}
 
 
-def report(rows, state):
+def report(rows, state, stats):
     n = len(rows)
     calls = sum(r["calls"] for r in rows)
     first_fail = sum(not r["first_ok"] for r in rows)
@@ -175,6 +181,8 @@ def report(rows, state):
         f"| 대화 호출 수 (재시도 포함) | {calls} |",
         f"| JSON 첫 시도 실패 | {first_fail}/{n} ({first_fail / n:.0%}) |",
         f"| 재시도 후에도 실패 → 대체 응답 | {fallbacks}/{n} |",
+        f"| 다른 모델로 넘어간 횟수 | 대화 {stats.get('chat_fallover', 0)}, 판정 {stats.get('judge_fallover', 0)} "
+        f"(모든 모델 실패: 대화 {stats.get('chat_unavailable', 0)}, 판정 {stats.get('judge_unavailable', 0)}) |",
         f"| 몸짓을 고른 턴 | {len(chosen)}/{n} |",
         f"| 목록 밖 몸짓을 골라 null 처리 | {invalid_raw} |",
         f"| 같은 몸짓 연속 | {repeat_motion} |",
@@ -194,7 +202,7 @@ def report(rows, state):
                   f"단계 {r['stage']} · 호감 {r['aff']}{' · 다음 사건 ' + r['event'] if r['event'] else ''}`", ""]
     out = "\n".join(lines)
     (BASE_DIR / "eval_result.md").write_text(out, encoding="utf-8")
-    print("\n".join(lines[:18]))
+    print("\n".join(lines[:19]))
     print("\n전문: eval_result.md")
 
 

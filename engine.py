@@ -10,8 +10,10 @@
 import json
 import random
 import re
+import time
 
 from db import Store
+from llm import BUDGET_SEC, LLMUnavailable
 from prompt_loader import load_blocks, render
 
 # ---------- 게임 규칙 (여기서 조정) ----------
@@ -179,8 +181,15 @@ class Engine:
         messages = self._to_llm_messages(msgs) + [{"role": "user", "content": user_message.strip()}]
 
         ids = {str(m.get("id")) for m in motion_list if isinstance(m, dict)}
-        for _ in range(2):  # 파싱 실패하면 1번 더
-            raw = self.llm.chat_json(system, messages, REPLY_SCHEMA)
+        start = time.monotonic()
+        for _ in range(2):  # 파싱 실패하면 1번 더 (두 번 합쳐 BUDGET_SEC 안에서)
+            remaining = BUDGET_SEC - (time.monotonic() - start)
+            if remaining < 1:
+                break
+            try:
+                raw = self.llm.chat_json(system, messages, REPLY_SCHEMA, budget_sec=remaining)
+            except LLMUnavailable:  # 모든 모델이 바쁨 → 바로 대체 응답
+                break
             data = self._parse_json(raw)
             if data and str(data.get("dialogue") or "").strip():
                 return self._validate_reply(data, ids)

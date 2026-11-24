@@ -25,6 +25,7 @@ FALLBACK_REPLY = "*서아가 잠시 말없이 잔 테두리를 손끝으로 훑�
 
 BUDGET_SEC = float(os.getenv("LLM_BUDGET_SEC", "15"))  # 요청 하나가 기다리는 최대 시간
 ATTEMPT_TIMEOUT_SEC = 8.0     # 호출 한 번이 이보다 오래 걸리면 끊고 다음 모델로
+SERVER_DEADLINE_SEC = 15      # Google에 알려 주는 기한 (Google은 10초 미만을 거부한다)
 RETRY_DELAYS = (1, 2)         # 같은 모델로 다시 시도하기 전에 쉬는 시간(초)
 RETRY_CODES = {429, 503}      # 과부하·한도 → 같은 모델로 다시 시도
 TIMEOUT_CODES = {408, 504}    # 시간 초과 → 바로 다음 모델
@@ -118,7 +119,12 @@ class GeminiLLM:
                         model=model,
                         contents=contents,
                         config=types.GenerateContentConfig(
-                            **config, http_options=types.HttpOptions(timeout=timeout_ms)
+                            **config, http_options=types.HttpOptions(
+                                timeout=timeout_ms,  # 우리 쪽에서 끊는 시간
+                                # SDK는 timeout을 Google 기한으로도 보내는데 10초 미만이면 400이 난다.
+                                # Google 쪽 기한은 넉넉히 주고, 끊는 건 위의 timeout으로 한다.
+                                headers={"X-Server-Timeout": str(SERVER_DEADLINE_SEC)},
+                            ),
                         ),
                     )
                 except Exception as e:

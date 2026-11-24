@@ -170,6 +170,43 @@ class FalloverTest(unittest.TestCase):
         self.assertNotIn("AIza", text)
 
 
+class RealSdkRequestTest(unittest.TestCase):
+    """가짜 client가 아니라 실제 google-genai SDK로 요청을 만들고, 네트워크 대신 MockTransport로 받는다.
+    Google은 기한(X-Server-Timeout)이 10초 미만이면 400을 내므로 그 값을 확인한다."""
+
+    def test_request_headers_and_fallover_through_sdk(self):
+        try:
+            import httpx2 as httpx_mod
+        except ImportError:
+            import httpx as httpx_mod
+        from google import genai
+        from google.genai import types
+
+        seen = []
+
+        def handler(request):
+            seen.append((request.url.path, request.headers.get("x-server-timeout"),
+                         request.extensions.get("timeout", {}).get("read")))
+            if "model-a" in request.url.path:
+                return httpx_mod.Response(503, json={"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}})
+            body = {"candidates": [{"content": {"role": "model", "parts": [{"text": GOOD}]}}]}
+            return httpx_mod.Response(200, json=body)
+
+        client = genai.Client(api_key="dummy", http_options=types.HttpOptions(
+            retry_options=types.HttpRetryOptions(attempts=1),
+            httpx_client=httpx_mod.Client(transport=httpx_mod.MockTransport(handler))))
+        with mock.patch.dict(os.environ, {"CHAT_MODELS": "model-a,model-b"}):
+            llm = GeminiLLM(client=client, sleep=lambda sec: None)
+        out = llm.chat_json("system", [{"role": "user", "content": "안녕"}],
+                            {"type": "OBJECT", "properties": {"dialogue": {"type": "STRING"}}})
+        self.assertEqual(json.loads(out)["dialogue"], "왔어, 사장님.")
+        self.assertEqual([p.rsplit("/", 1)[-1] for p, _, _ in seen],
+                         ["model-a:generateContent"] * 3 + ["model-b:generateContent"])
+        for _, deadline, read_timeout in seen:
+            self.assertGreaterEqual(int(deadline), 10)              # Google 최소 기한
+            self.assertLessEqual(read_timeout, llm_mod.ATTEMPT_TIMEOUT_SEC)  # 우리 쪽은 짧게 끊음
+
+
 class ModelListTest(unittest.TestCase):
     def test_models_env_wins(self):
         with mock.patch.dict(os.environ, {"CHAT_MODELS": " a , b,,a ", "CHAT_MODEL": "x"}):

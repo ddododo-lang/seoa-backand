@@ -22,7 +22,7 @@ AFFECTION_CAP = {1: 30, 2: 50, 3: 70, 4: 85, 5: 95, 6: 100}
 STAGE_EVENTS = {
     1: ["INJURY", "TAEO"],
     2: ["INJURY", "MARI", "TAEO", "BLACKOUT"],
-    3: ["MARI", "STORM", "DATE", "ROOFTOP", "BLACKOUT"],
+    3: ["MARI", "STORM", "ROOFTOP", "BLACKOUT"],  # DATE 는 2단계 장난 갈래 사건으로 옮김(앱 51)
     4: ["STORM", "ROOFTOP", "TAEO"],
     5: ["TAEO"],
     6: ["MARI", "STORM", "DATE", "ROOFTOP", "BLACKOUT", "INJURY", "TAEO"],
@@ -53,7 +53,16 @@ SHORT_MESSAGE_LEN = 20      # 이보다 짧은 유저 메시지는 '짧은 답'
 SHORT_STREAK_TRIGGER = 3    # 짧은 답이 이만큼 연속되면 사건 발동
 QUIET_TURNS_TRIGGER = 15    # 사건 없이 이만큼 지나면 사건 발동
 EVENT_COOLDOWN = 20         # 같은 사건을 다시 쓰기까지 필요한 턴 수
-EVENT_LOCATIONS = {"STORM": "바 '라스트 오더' 2층"}  # 이 사건이 나온 답장은 이 장소로 옮김 (앱 배경 전환)
+EVENT_LOCATIONS = {  # 이 사건이 시작되는 답장은 이 장소로 옮김 (앱 배경 전환). DATE·WALK_HOME 은 밖으로 나갈 때 모델이 옮김
+    "STORM": "바 '라스트 오더' 2층", "ROOFTOP": "바 옥상", "ALLEY": "비 내리는 골목",
+}
+# 갈래 사건 (앱 51): 단계 → 갈래 → 사건, 그 단계에서 호감이 기준에 닿으면 한 번
+ROUTE_EVENTS = {2: {"tease": "DATE", "care": "WALK_HOME"},
+                3: {"tease": "STORM", "care": "ROOFTOP"},
+                4: {"tease": "ALLEY", "care": "ALLEY"}}
+ROUTE_EVENT_AFFECTION = {2: 40, 3: 55, 4: 65}
+ROUTE_SCENES = {"DATE", "WALK_HOME", "STORM", "ROOFTOP", "ALLEY"}
+SCENE_JUDGES = 2  # 갈래 장면이 시작된 뒤 판정 몇 번(≈ 3턴씩) 동안 장면 블록을 계속 넣을지
 STAGE_UP_SCENES = {2, 3, 4, 6}  # 단계가 오른 다음 답장에 한 번 넣는 상징 장면(STAGE_UP_n). 5는 DEPARTURE
 DEPARTURE_DAYS = 7          # 5단계 출발까지 남은 날
 SUMMARY_TRIGGER = 40        # 요약 안 된 메시지가 이만큼 쌓이면 요약
@@ -87,6 +96,8 @@ def new_state() -> dict:
         "ending": None,           # None | "lovers" | "departed"
         "recent_lines": [],       # 직전 서아 응답 3개 (반복 방지)
         "route": None,            # 갈래 "tease" | "care" | None (앱 51이 정함, 서버는 읽기만)
+        "scene": None,            # 진행 중인 갈래 장면(ROUTE_SCENES). 판정이 정하고 앱이 돌려보냄
+        "scene_judges_left": 0,   # 그 장면 블록을 넣을 남은 판정 수
         "episode": None,          # 특별 에피소드 id (앱 42: "s2"). 없으면 본 이야기
         "episode_stage": None,    # 에피소드만의 단계 1~6 (앱이 정함)
         "episode_stage_name": "", # 에피소드 단계 이름 (앱 이름)
@@ -115,6 +126,9 @@ def normalize_state(raw: dict | None) -> dict:
     state["affection"] = max(0, min(100, state["affection"]))
     if state["route"] not in ROUTES:
         state["route"] = None
+    if state["scene"] not in ROUTE_SCENES:
+        state["scene"] = None
+    state["scene_judges_left"] = max(0, min(SCENE_JUDGES, int(state["scene_judges_left"] or 0))) if state["scene"] else 0
     if state["episode"] not in EPISODES:
         state["episode"] = None
     if state["episode"]:
@@ -130,7 +144,8 @@ def normalize_state(raw: dict | None) -> dict:
     ev = state["pending_event"]
     if isinstance(ev, str):
         ev = ev.removeprefix("EVENT_")
-        known = {e for v in STAGE_EVENTS.values() for e in v} | {"DEPARTURE"} | {f"STAGE_UP_{n}" for n in STAGE_UP_SCENES}
+        known = ({e for v in STAGE_EVENTS.values() for e in v} | {"DEPARTURE"} | ROUTE_SCENES
+                 | {f"STAGE_UP_{n}" for n in STAGE_UP_SCENES})
         state["pending_event"] = ev if ev in known else None
     else:
         state["pending_event"] = None
@@ -301,6 +316,11 @@ class Engine:
         if need_summary and judge["summary"]:
             state["summary"] = judge["summary"]
             changes.append("요약 갱신")
+        if not state["episode"]:
+            self._tick_scene(state)
+            route_event = self._route_event(state)
+            if route_event:
+                self._start_route_scene(state, route_event, changes)
         # 에피소드 중에는 앱이 단계·장면을 정하므로 사건 계산을 건너뛴다 (단계 상승은 _apply에서 건너뜀)
         nxt_event = None if state["episode"] else self._tick_events(state, last_user)
         if nxt_event:
@@ -365,10 +385,18 @@ class Engine:
             render(self.blocks["MOTION_BLOCK"], values),
             self.blocks["OUTPUT_FORMAT"],
         ]
-        if event and f"EVENT_{event}" in self.blocks:
+        if state["stage"] == 5 and state["route"] and state["departure_days_left"] is not None:
+            parts.append(self.blocks[f"ROUTE_PURSUE_{state['route'].upper()}"])
+        if state["stage"] == 6 and state["route"]:
+            parts.append(self.blocks[f"ROUTE_MORNING_{state['route'].upper()}"])
+        if event and f"EVENT_{event}" in self.blocks:  # 이번 답장의 사건(시작 턴)
             parts.append(self.blocks[f"EVENT_{event}"])
         elif event and event.startswith("STAGE_UP_") and event in self.blocks:
             parts.append(self.blocks[event])  # 단계 오른 직후 한 번: 앱이 답장 뒤 pending_event 를 비움
+        elif state["scene"]:  # 다른 사건이 없으면 진행 중인 갈래 장면을 이어 감
+            parts.append(self.blocks[f"EVENT_{state['scene']}"])
+        if "ALLEY" in (event, None if event else state["scene"]) and state["route"] == "care":
+            parts.append(self.blocks["EVENT_ALLEY_CARE"])
         return "\n\n".join(parts)
 
     @staticmethod
@@ -380,6 +408,39 @@ class Engine:
         return msgs
 
     # ---------- 사건 ----------
+    @staticmethod
+    def _tick_scene(state: dict) -> None:
+        """진행 중인 갈래 장면의 남은 판정 수를 하나 줄이고, 다 되면 장면을 닫는다."""
+        if state["scene"]:
+            state["scene_judges_left"] -= 1
+            if state["scene_judges_left"] <= 0:
+                state["scene"], state["scene_judges_left"] = None, 0
+
+    @staticmethod
+    def _route_event(state: dict) -> str | None:
+        """갈래 사건: 그 단계에서 호감이 기준에 닿으면 한 번(앱 51). route 가 없으면 None(예전 규칙)."""
+        route, stage = state["route"], state["stage"]
+        if not route or state["ending"] or state["pending_event"] or stage not in ROUTE_EVENTS:
+            return None
+        event = ROUTE_EVENTS[stage][route]
+        if f"ROUTE_{event}" in state["used_events"] or state["affection"] < ROUTE_EVENT_AFFECTION[stage]:
+            return None
+        if stage == 2 and "outside" in state["stage_flags"]:
+            return None  # 유저가 먼저 바 밖으로 나갔으면 그 장면으로 이어 감
+        return event
+
+    @staticmethod
+    def _start_route_scene(state: dict, event: str, changes: list[str]) -> None:
+        state["pending_event"] = event
+        state["scene"], state["scene_judges_left"] = event, SCENE_JUDGES
+        state["used_events"][f"ROUTE_{event}"] = state["turn"]
+        state["used_events"][event] = state["turn"]
+        state["short_streak"], state["turns_since_event"] = 0, 0  # 무작위 사건이 바로 뒤따르지 않게
+        changes.append(f"갈래 사건: {event}")
+        if event == "ALLEY" and "비밀1" not in state["revealed_secrets"]:
+            state["revealed_secrets"].append("비밀1")  # 「그 골목」에서 털어놓음. _advance(4) 는 갈래가 있으면 건너뜀
+            changes.append("비밀1 공개 (그 골목)")
+
     def _tick_events(self, state: dict, user_message: str) -> str | None:
         """턴을 세고, 사건 발동 조건이 맞으면 다음 턴에 쓸 사건을 pending_event에 넣는다."""
         state["turn"] += 1
@@ -399,6 +460,8 @@ class Engine:
         candidates = [
             e for e in STAGE_EVENTS[state["stage"]]
             if state["turn"] - state["used_events"].get(e, -10_000) >= EVENT_COOLDOWN
+            # 갈래가 정해지면 2~5단계에서 갈래 사건은 무작위로 나오지 않음(자기 갈래 사건은 정해진 때 한 번, 다른 갈래 것은 안 나옴)
+            and not (state["route"] and 2 <= state["stage"] <= 5 and e in ROUTE_SCENES)
         ]
         if not candidates:
             return None
@@ -514,7 +577,7 @@ class Engine:
         changes.append(f"단계 상승 → {nxt}. {STAGE_NAMES[nxt]}")
         if nxt in STAGE_UP_SCENES:
             state["pending_event"] = f"STAGE_UP_{nxt}"  # 다음 답장에 그 단계의 상징 장면 (다른 사건보다 먼저)
-        if nxt == 4 and "비밀1" not in state["revealed_secrets"]:
+        if nxt == 4 and not state["route"] and "비밀1" not in state["revealed_secrets"]:
             state["revealed_secrets"].append("비밀1")  # 4단계 지침대로 1년 전 이야기를 털어놓게 함
             changes.append("비밀1 공개")
         if nxt == 5:

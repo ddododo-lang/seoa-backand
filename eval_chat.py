@@ -6,6 +6,8 @@
     python eval_chat.py --pause 20  # 턴 사이 20초 쉬기 (실제 사람처럼, 한도에 덜 걸림)
     python eval_chat.py --scenario all --pause 10   # 앱 맞추기 항목 점검 (말투·셀카·다시 들어옴·포즈·크리스마스·선물)
     python eval_chat.py --scenario pose             # 하나만
+    python eval_chat.py --scenario storm2f --pause 10   # 2층 폭우: 서아가 먼저 다가가면 ❌
+    python eval_chat.py --scenario stageup4 --pause 10  # 3→4 단계 상승 다음 턴: 지어낸 이름이면 ❌
 
 앱과 같은 방식(상태 없는 /chat → /judge)으로 엔진을 직접 호출한다. 서버를 켤 필요는 없다.
 대화 전문은 eval_result.md에 저장된다.
@@ -213,6 +215,50 @@ SCENARIOS = {
         "judge": True,
     },
 }
+# 서아 말투 PR(feat/seoa-tone): 2층 폭우, 3→4 단계 상승 다음 턴
+SCENARIOS["storm2f"] = {  # EVENT_STORM: 2층, 서아는 먼저 다가가지 않고, 유저가 다가오면 받아치되 피하지 않음
+    "state": {"stage": 3, "affection": 50, "day": 7, "pending_event": "STORM"},
+    "history": BASE_HISTORY,
+    "turns": ["(젖은 수건을 건넨다) 길 다 막혔대. 오늘은 위층에서 자고 가.",
+              "(침대 끝에 앉아 책을 편다) 불 끌게.",
+              "(소파 쪽으로 다가가 옆에 앉는다) 진짜 거기서 잘 거야?"],
+    "check": "storm",
+}
+SCENARIOS["stageup4"] = {  # 3→4: /judge 가 pending_event = STAGE_UP_4 로 돌려준 다음 턴. 앱은 유저 이름을 보내지 않음
+    "state": {"stage": 4, "affection": 61, "day": 9, "pending_event": "STAGE_UP_4",
+              "summary": "서아는 2주째 매일 바에 온다. 사장님과 조금씩 가까워졌다."},
+    "history": BASE_HISTORY,
+    "turns": ["오늘은 좀 조용하네.", "그냥 사장님이라고 불러도 돼."],
+    "check": "name",
+}
+SECOND_FLOOR = "바 '라스트 오더' 2층"
+CHECK_SYSTEM = "너는 롤플레이 대사 검사기다. 질문에 JSON 하나로만 답한다."
+CHECK_PROMPTS = {  # 모델에게 묻는 확인 (문자열만으로는 못 가리는 것)
+    "approach": ('유저 행동: {user}\n서아 응답: {text}\n\n서아가 유저가 다가오기 전에 먼저 유저에게 다가가거나 '
+                 '몸을 기대거나 손을 잡는 등 먼저 신체 접촉·거리 좁히기를 시작했나? '
+                 '{{"yes": true 또는 false, "why": "한 문장"}}'),
+    "avoid": ('유저 행동: {user}\n서아 응답: {text}\n\n유저가 다가왔을 때 서아가 물러나거나 자리를 피하거나 유저를 밀어냈나? '
+              '(말로 받아치는 것은 피한 게 아니다) {{"yes": true 또는 false, "why": "한 문장"}}'),
+    "invented": ('서아 응답: {text}\n\n서아가 유저를 사람 이름(예: 민준, 지우)으로 불렀나? '
+                 '"사장님", "너", "당신"은 이름이 아니다. {{"yes": true 또는 false, "name": "부른 이름 또는 빈 문자열"}}'),
+}
+
+
+def count_bits(text: str | None) -> int:
+    """대사 마디(문장) 수. 문장 끝(. ? !)으로 센다. 문장 가운데 「…」(예: 「시끄럽고… 잘 보여서.」)는 끊지 않는다."""
+    parts = re.split(r"(?<=[.?!。])\s+", (text or "").strip())
+    return len([x for x in parts if x.strip(" .…?!")])
+
+
+def model_check(llm, kind: str, user: str, text: str) -> dict | None:
+    try:
+        raw = llm.complete(CHECK_SYSTEM, CHECK_PROMPTS[kind].format(user=user, text=text), json_mode=True)
+        data = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
+        return data if isinstance(data.get("yes"), bool) else None
+    except Exception:
+        return None
+
+
 for _scene, (_gift, _state, _history) in GIFT_SCENES.items():  # 장면 셋 × 기분 맞음/안 맞음
     for _fit in (False, True):
         SCENARIOS[f"gift_{_scene}{'_fit' if _fit else ''}"] = {
@@ -247,7 +293,7 @@ def run_scenarios(which: str, pause: float = 0) -> None:
             sec = time.time() - t0
             text = to_text(reply)
             dialogue = reply["dialogue"]
-            split = lambda t: len([x for x in re.split(r"[.?!…。]+\s*", t or "") if x.strip()])  # noqa: E731
+            split = lambda t: count_bits(t)  # noqa: E731
             sentences, action_n = split(dialogue), split(reply["action"])
             checks = [f"대사 {'❌ ' if sentences > 2 else ''}{len(dialogue)}자·{sentences}마디",
                       f"지문 {'❌ ' if action_n > 2 else ''}{action_n}문장"]
@@ -264,6 +310,23 @@ def run_scenarios(which: str, pause: float = 0) -> None:
             if state.get("episode"):
                 ok = reply["location"] in (None, *allowed_locations(normalize_state(state)))
                 checks.append(f"장소 {'✅' if ok else '❌'} {reply['location']}")
+            if sc.get("check") == "storm":
+                if user.startswith("(소파 쪽으로 다가가"):  # 유저가 다가옴 → 피하면 ❌
+                    r = model_check(llm, "avoid", user, text)
+                    checks.append("⚠ 피함 확인 실패" if r is None else f"{'❌ 피함' if r['yes'] else '✅ 안 피함'}({r.get('why', '')})")
+                else:  # 유저가 다가오지 않음 → 서아가 먼저 다가가면 ❌
+                    r = model_check(llm, "approach", user, text)
+                    checks.append("⚠ 접근 확인 실패" if r is None else f"{'❌ 서아가 먼저 다가감' if r['yes'] else '✅ 먼저 안 다가감'}({r.get('why', '')})")
+                if user.startswith("(젖은 수건"):
+                    checks.append(f"장소 {'✅' if reply['location'] == SECOND_FLOOR else '❌'} {reply['location']}")
+            if sc.get("check") == "name":
+                r = model_check(llm, "invented", user, text)
+                checks.append("⚠ 이름 확인 실패" if r is None else (f"❌ 지어낸 이름 {r.get('name')}" if r["yes"] else "✅ 지어낸 이름 없음"))
+                if sc["turns"].index(user) == 0:
+                    checks.append("이름 물음 ✅" if "이름" in dialogue else "이름 안 물음")
+                state = dict(state, pending_event=None)  # 앱처럼 답장 뒤 비움
+            elif sc.get("check") == "storm":
+                state = dict(state, pending_event=None, location=reply["location"] or state.get("location"))
             if sc.get("judge"):
                 before = normalize_state(state)["affection"]
                 judged = engine.judge(state, user, text)

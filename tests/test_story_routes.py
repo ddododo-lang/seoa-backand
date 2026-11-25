@@ -60,11 +60,11 @@ class RouteNormalizeTest(unittest.TestCase):  # 1
 
 class RouteEventsTest(unittest.TestCase):  # 2
     def test_stage2_by_route(self):
-        self.assertEqual(judge({"stage": 2, "affection": 39, "route": "tease"}, affection_delta=1)["pending_event"], "DATE")
-        self.assertEqual(judge({"stage": 2, "affection": 40, "route": "care"})["pending_event"], "WALK_HOME")
+        self.assertEqual(judge({"stage": 2, "affection": 14, "route": "tease"}, affection_delta=1)["pending_event"], "DATE")
+        self.assertEqual(judge({"stage": 2, "affection": 15, "route": "care"})["pending_event"], "WALK_HOME")
 
-    def test_stage2_needs_40_and_no_outside(self):
-        self.assertNotIn(judge({"stage": 2, "affection": 30, "route": "care"})["pending_event"], ("DATE", "WALK_HOME"))
+    def test_stage2_needs_15_and_no_outside(self):  # S4: 15
+        self.assertNotIn(judge({"stage": 2, "affection": 14, "route": "care"})["pending_event"], ("DATE", "WALK_HOME"))
         self.assertNotIn(judge({"stage": 2, "affection": 45, "route": "care", "stage_flags": ["outside"]})["pending_event"],
                          ("DATE", "WALK_HOME"))
 
@@ -107,9 +107,9 @@ class RouteEventsTest(unittest.TestCase):  # 2
     def test_scene_lasts_two_judges(self):
         st = judge({"stage": 2, "affection": 41, "route": "tease"})["state"]
         st["pending_event"] = None  # 앱이 답장 뒤 비움
-        self.assertIn("하룻밤 애인", system_for(st))
+        self.assertIn("위장 연인 부탁", system_for(st))
         st = judge(st)["state"]
-        self.assertIn("하룻밤 애인", system_for(dict(st, pending_event=None)))
+        self.assertIn("위장 연인 부탁", system_for(dict(st, pending_event=None)))
         st = judge(st)["state"]
         self.assertIsNone(st["scene"])
 
@@ -224,7 +224,7 @@ class TalkBonusTest(unittest.TestCase):  # 5
         self.assertEqual(r["state"]["affection"], 30)  # 1단계 상한 30 그대로
 
     def test_min_messages_and_progress(self):
-        base = {"stage": 2, "affection": 45, "stage_flags": ["outside"], "stage_user_msgs": 13}
+        base = {"stage": 2, "affection": 45, "stage_flags": ["outside"], "stage_user_msgs": 7}  # S4: 2→3 최소 9개
         r = judge(base, "한 마디")
         self.assertFalse(r["stage_up"])
         self.assertEqual(r["progress"]["min_msgs_left"], 1)

@@ -94,13 +94,19 @@ EVENT_LOCATIONS = {  # 이 사건이 시작되는 답장은 이 장소로 옮김
 ROUTE_EVENTS = {2: {"tease": "DATE", "care": "WALK_HOME"},
                 3: {"tease": "STORM", "care": "ROOFTOP"},
                 4: {"tease": "ALLEY", "care": "ALLEY"}}
-ROUTE_EVENT_AFFECTION = {2: 40, 3: 55, 4: 65}
+ROUTE_EVENT_AFFECTION = {2: 15, 3: 28, 4: 42}  # S4: 단계 조건(25·40·55)보다 먼저 나오게
 ROUTE_SCENES = {"DATE", "WALK_HOME", "STORM", "ROOFTOP", "ALLEY"}
 SCENE_JUDGES = 2  # 갈래 장면이 시작된 뒤 판정 몇 번(≈ 3턴씩) 동안 장면 블록을 계속 넣을지
 STAGE_UP_SCENES = {2, 3, 4, 6}  # 단계가 오른 다음 답장에 한 번 넣는 상징 장면(STAGE_UP_n). 5는 DEPARTURE
 # 대화량 보조 점수: S3 에서 없앰(언제나 0). 필드는 앱 호환을 위해 남김
 TALK_BONUS_STAGE_MAX = 8   # 단계마다 보너스 합계 상한(단계가 오르면 0부터)
-MIN_STAGE_MSGS = {2: 15, 3: 20, 4: 15}  # 그 단계에서 이만큼 유저 메시지를 보내야 다음 단계로(1→2·5→6 없음)
+MIN_STAGE_MSGS = {1: 3, 2: 9, 3: 9, 4: 6}  # 그 단계에서 이만큼 유저 메시지를 보내야 다음 단계로(S4. 5→6 은 위기 판정)
+# S4 속마음 힌트: 최소 수를 넘겼는데 다음 단계 조건이 안 찼으면 다음 답장에 한 번, 그래도 그대로면 HINT_AGAIN_MSGS 뒤 한 번 더
+HINT_OF_STAGE = {1: "HINT_1", 2: "HINT_2", 3: "HINT_3", 4: "HINT_4"}
+HINT_BLOCKS = {"HINT_1", "HINT_2", "HINT_3", "HINT_4"}
+HINT_MAX = 2
+HINT_AGAIN_MSGS = 10
+HINT_LOOKBACK = 6          # /chat: 최근 서아 답장 이만큼에 그 줄이 이미 있으면 다시 넣지 않음
 GIFT_MOMENT_GAP = 10       # 같은 순간 선물은 준 뒤 유저 메시지 이만큼 지나야 다시 엶
 FIRST_NIGHT_TURNS = 3     # 첫날 밤 사정(손등의 피)은 유저 메시지 이만큼까지만 넣음. 그 뒤엔 같은 묘사가 반복되지 않게 뺌
 GIFT_MOMENT_QUIET = 3      # 순간 선물을 준 뒤 이만큼은 어떤 순간 선물도 열지 않음(자주 넣지 않기)
@@ -177,6 +183,9 @@ def new_state() -> dict:
         "stage_notes": {},        # S3: 끝난 단계마다 한 문장 {"1": "…"} (본편만, 요약이 바뀌어도 그대로)
         "stage_note_due": None,   # S3: 다음 판정에 한 문장을 부탁할 끝난 단계 번호
         "promises": [],           # S3: 서아가 한 제안·약속 최근 PROMISES_MAX 개 (본편만)
+        "hint_due": None,         # S4: 다음 답장에 넣을 속마음 힌트 블록 이름. 다음 판정이 비움
+        "stage_hints": 0,         # S4: 이 단계에서 낸 속마음 힌트 수 (최대 HINT_MAX)
+        "hint_msgs": 0,           # S4: 마지막 힌트를 정할 때의 stage_user_msgs
     }
 
 
@@ -232,7 +241,7 @@ def normalize_state(raw: dict | None) -> dict:
             state[key] = max(0, min(3, int(state[key])))
         except (TypeError, ValueError):
             state[key] = 0
-    for key in ("stage_bonus", "stage_user_msgs"):
+    for key in ("stage_bonus", "stage_user_msgs", "stage_hints", "hint_msgs"):
         try:
             state[key] = max(0, int(state[key]))
         except (TypeError, ValueError):
@@ -290,6 +299,8 @@ def normalize_state(raw: dict | None) -> dict:
     state["stage_note_due"] = due if due in STAGE_NAMES else None
     promises = state["promises"] if isinstance(state["promises"], list) else []
     state["promises"] = [x.strip()[:MEMO_MAX_LEN] for x in promises if isinstance(x, str) and x.strip()][-PROMISES_MAX:]
+    if state["hint_due"] not in HINT_BLOCKS or state["episode"]:
+        state["hint_due"] = None
     state["stage_flags"] = [f for f in state["stage_flags"] if f in ALLOWED_FLAGS - NAME_FLAGS]
     if not isinstance(state["used_events"], dict):
         state["used_events"] = {}
@@ -360,6 +371,7 @@ class Engine:
         state["_xmas_late"] = self._xmas_late(state, history)
         state["_first_night"] = sum(1 for h in history if h.get("r") == "u") < FIRST_NIGHT_TURNS
         event = state["pending_event"]
+        state["_hint"] = None if event else self._hint_now(state["hint_due"], history)
         system = self._build_system(state, event, motion_list)
         opening = self.blocks["OPENING"].strip()
         # OPENING은 모델이 만들지 않고 고정. 에피소드는 앱이 자기 첫 장면을 기록으로 보내므로 바 오프닝을 넣지 않음
@@ -419,6 +431,18 @@ class Engine:
             if bottom <= left <= top:
                 return None if key in recent else line
         return None
+
+    def hint_line(self, name: str) -> str:
+        """속마음 힌트 블록의 그 줄(「그대로: 」 뒤)."""
+        return self.blocks[name].split("그대로: ", 1)[-1].strip()
+
+    def _hint_now(self, name: str | None, history: list[dict]) -> str | None:
+        """S4: 힌트가 정해져 있고, 최근 서아 답장에 그 줄이 아직 없으면 그 블록 이름(판정 사이 여러 답장에 되풀이되지 않게)."""
+        if not name or name not in self.blocks:
+            return None
+        key = re.sub(r"\s+", "", self.hint_line(name))[:12]
+        recent = [str(h.get("t") or "") for h in history if h.get("r") == "c"][-HINT_LOOKBACK:]
+        return None if any(key in re.sub(r"\s+", "", t) for t in recent) else name
 
     @staticmethod
     def _open_moments(moments: list[dict], history: list[dict], user_message: str = "") -> list[dict]:
@@ -503,6 +527,8 @@ class Engine:
             state["name_quiet"] = max(0, min(NAME_QUIET_MSGS, state["name_quiet"]) - len(msgs))
             judge["talk_bonus"] = max(0, min(self._talk_bonus(msgs, judge), TALK_BONUS_STAGE_MAX - state["stage_bonus"]))
             state["stage_user_msgs"] += len(msgs)
+            state["hint_due"] = None  # S4: 앞 판정이 정한 힌트는 그 사이 답장에 나갔음
+            self._tick_scene(state)  # S4: 단계 조건이 갈래 장면을 「마침」을 보므로 단계 판단보다 먼저
         changes = [] if state["episode"] else self._remember(state, judge)
         changes += self._apply(state, judge, None, last_reply)
         if not state["episode"] and state["stage"] != stage_before:
@@ -520,7 +546,6 @@ class Engine:
             state["summary"] = judge["summary"]
             changes.append("요약 갱신")
         if not state["episode"]:
-            self._tick_scene(state)
             route_event = None if self._name_scene_quiet(state) else self._route_event(state)
             if route_event:
                 self._start_route_scene(state, route_event, changes)
@@ -530,6 +555,8 @@ class Engine:
         nxt_event = None if state["episode"] else self._tick_events(state, last_user)
         if nxt_event:
             changes.append(f"다음 턴 사건: {nxt_event}")
+        if not state["episode"] and state["stage"] == stage_before:
+            self._hint(state, changes)
         state["judge_soon"] = state["name_state"] in ("asked", "refused")
         return {
             "state": state,
@@ -629,6 +656,8 @@ class Engine:
             parts.append(self.blocks[f"EVENT_{state['scene']}"])
         if "ALLEY" in (event, None if event else state["scene"]) and state["route"] == "care":
             parts.append(self.blocks["EVENT_ALLEY_CARE"])
+        if state.get("_hint") and not event:  # S4 속마음 힌트: 사건·이름 장면이 있는 답장에는 넣지 않음 (reply() 가 정함)
+            parts.append(self.blocks[state["_hint"]])
         return "\n\n".join(parts)
 
     def _name_watch(self, state: dict, event: str | None, values: dict) -> str | None:
@@ -692,6 +721,22 @@ class Engine:
         if stage == 2 and "outside" in state["stage_flags"]:
             return None  # 유저가 먼저 바 밖으로 나갔으면 그 장면으로 이어 감
         return event
+
+    @classmethod
+    def _hint(cls, state: dict, changes: list[str]) -> None:
+        """S4 속마음 힌트 (1~4단계): 최소 수를 넘겼는데 단계가 안 올랐으면 다음 답장에 한 번, 그 뒤 메시지 10개 지나 한 번 더.
+        사건이 정해졌거나 갈래 장면이 열려 있거나 이름 장면 중이면 다음 판정으로 미룸."""
+        st, msgs = state["stage"], state["stage_user_msgs"]
+        name = HINT_OF_STAGE.get(st)
+        if not name or state["ending"] or state["pending_event"] or state["scene"] or cls._name_scene_quiet(state):
+            return
+        if msgs < MIN_STAGE_MSGS.get(st, 0) or state["stage_hints"] >= HINT_MAX:
+            return
+        if state["stage_hints"] and msgs - state["hint_msgs"] < HINT_AGAIN_MSGS:
+            return
+        state["hint_due"], state["hint_msgs"] = name, msgs
+        state["stage_hints"] += 1
+        changes.append(f"속마음 힌트: {name} ({state['stage_hints']}/{HINT_MAX})")
 
     @staticmethod
     def _start_route_scene(state: dict, event: str, changes: list[str]) -> None:
@@ -931,6 +976,7 @@ class Engine:
         state["stage"] = stage
         state["stage_flags"] = []
         state["stage_bonus"], state["stage_user_msgs"] = 0, 0
+        state["stage_hints"], state["hint_msgs"], state["hint_due"] = 0, 0, None
         if state["scene"]:  # 3단계 갈래 장면이 2단계로 따라오지 않게
             state["scene"], state["scene_judges_left"] = None, 0
 
@@ -982,19 +1028,26 @@ class Engine:
             changes.append(f"이름 두 번째 거절 → {state['stage']}단계, 호감 -{NAME_REFUSE_AGAIN_PENALTY}, 다시는 이름 안 부름")
 
     @staticmethod
-    def _next_stage(state: dict) -> int | None:
-        st, aff, flags = state["stage"], state["affection"], set(state["stage_flags"])
+    def _scene_done(state: dict, stage: int) -> bool:
+        """S4: 그 단계의 갈래 장면을 마쳤는지. 장면을 시작했고(used_events.ROUTE_x) 장면 블록이 닫혔으면(scene 이 그 장면이 아님) 마침."""
+        event = ROUTE_EVENTS[stage][state["route"]]
+        return f"ROUTE_{event}" in state["used_events"] and state["scene"] != event
+
+    @classmethod
+    def _next_stage(cls, state: dict) -> int | None:
+        st, aff, flags, route = state["stage"], state["affection"], set(state["stage_flags"]), state.get("route")
         if state.get("stage_user_msgs", 0) < MIN_STAGE_MSGS.get(st, 0):
             return None  # 호감·플래그가 차도 이 단계에서 이만큼은 대화해야 오름
-        if st == 1 and aff >= 10 and flags & {"care", "protect"}:  # 첫날 안에 한 번 오르게 (앱과 같은 기준)
+        if st == 1 and aff >= 10 and flags & {"care", "protect"}:
             return 2
         if st == 2 and state.get("name_state") == "refused":
             return None  # 이름을 거절한 뒤 사과 전에는 3단계로 못 오름
-        if st == 2 and aff >= 40 and "outside" in flags:
-            return 3
-        if st == 3 and aff >= 60 and "sincere" in flags:
+        if st == 2 and aff >= 25:  # 갈래 장면(DATE·WALK_HOME)을 마침. 유저가 먼저 밖에 나가 장면을 건너뛴 때(outside)도 됨
+            if ("outside" in flags) if not route else (cls._scene_done(state, 2) or "outside" in flags):
+                return 3
+        if st == 3 and aff >= 40 and "sincere" in flags and (not route or cls._scene_done(state, 3)):
             return 4
-        if st == 4 and aff >= 75:
+        if st == 4 and aff >= 55 and (not route or cls._scene_done(state, 4)):
             return 5
         if st == 5 and "pursue" in flags and (state["departure_days_left"] or 0) > 0:
             return 6
@@ -1005,6 +1058,7 @@ class Engine:
         state["stage"] = nxt
         state["stage_flags"] = []
         state["stage_bonus"], state["stage_user_msgs"] = 0, 0  # 단계마다 새로 셈
+        state["stage_hints"], state["hint_msgs"], state["hint_due"] = 0, 0, None
         changes.append(f"단계 상승 → {nxt}. {STAGE_NAMES[nxt]}")
         if nxt in STAGE_UP_SCENES:
             state["pending_event"] = f"STAGE_UP_{nxt}"  # 다음 답장에 그 단계의 상징 장면 (다른 사건보다 먼저)

@@ -64,7 +64,9 @@ EPISODES = {
 LOCATIONS = ["바 '라스트 오더' 1층", "바 '라스트 오더' 2층", "네온 골목", "비 내리는 골목", "바 옥상"]
 EMOTIONS = {"평온", "기쁨", "도발", "장난", "진심", "설렘", "수줍음", "놀람", "슬픔", "분노", "질투", "당황"}
 POSE_REQUEST = re.compile(r"^\s*(.+?)\s*해\s*줄래\s*\??\s*$")  # 앱 48 포즈 부탁 문장
-HISTORY_MESSAGES = 32       # 대화 호출에 넣을 최근 기록 (16턴 = 유저 16 + 서아 16)
+HISTORY_MESSAGES = 80       # 대화 호출에 넣을 최근 기록 (40턴 = 유저 40 + 서아 40, S3)
+PROMISES_MAX = 5            # S3: 서아가 한 약속·제안은 최근 이만큼
+MEMO_MAX_LEN = 200          # S3: 단계 기록·약속 한 줄 길이 상한
 FALLBACK = {"action": None, "dialogue": "…", "motion_id": None, "emotion": "평온", "location": None, "gift_moment": None}
 REPLY_SCHEMA = {  # Gemini 응답 스키마 (OUTPUT_FORMAT과 같은 모양)
     "type": "OBJECT",
@@ -96,13 +98,9 @@ ROUTE_EVENT_AFFECTION = {2: 40, 3: 55, 4: 65}
 ROUTE_SCENES = {"DATE", "WALK_HOME", "STORM", "ROOFTOP", "ALLEY"}
 SCENE_JUDGES = 2  # 갈래 장면이 시작된 뒤 판정 몇 번(≈ 3턴씩) 동안 장면 블록을 계속 넣을지
 STAGE_UP_SCENES = {2, 3, 4, 6}  # 단계가 오른 다음 답장에 한 번 넣는 상징 장면(STAGE_UP_n). 5는 DEPARTURE
-# 대화량 보조 점수 (판정 코드에서 계산, 모델에 맡기지 않음)
-TALK_LONG = 40             # 이 글자 수(공백 뺌) 이상이면 긴 메시지
-TALK_MAX_COUNT = 150       # 메시지 하나는 이 글자 수까지만 셈
-TALK_BONUS_FLAGS = {"care", "sincere", "comfort", "tease"}
+# 대화량 보조 점수: S3 에서 없앰(언제나 0). 필드는 앱 호환을 위해 남김
 TALK_BONUS_STAGE_MAX = 8   # 단계마다 보너스 합계 상한(단계가 오르면 0부터)
 MIN_STAGE_MSGS = {2: 15, 3: 20, 4: 15}  # 그 단계에서 이만큼 유저 메시지를 보내야 다음 단계로(1→2·5→6 없음)
-NOT_TALK = re.compile(r"[\sㅋㅎㅠㅜㄷㄱ~!?.,…·\-_^*()\[\]<>:;'\"0-9]+")  # 이것만 있으면 「글」이 아님(이모지는 따로 뺌)
 GIFT_MOMENT_GAP = 10       # 같은 순간 선물은 준 뒤 유저 메시지 이만큼 지나야 다시 엶
 FIRST_NIGHT_TURNS = 3     # 첫날 밤 사정(손등의 피)은 유저 메시지 이만큼까지만 넣음. 그 뒤엔 같은 묘사가 반복되지 않게 뺌
 GIFT_MOMENT_QUIET = 3      # 순간 선물을 준 뒤 이만큼은 어떤 순간 선물도 열지 않음(자주 넣지 않기)
@@ -134,6 +132,7 @@ SUMMARY_SYSTEM = (
     "너는 롤플레이 대화 요약기다. 기존 요약과 새 대화를 합쳐 하나의 요약으로 만든다. "
     "중요한 사건, 관계 변화, 서아가 한 약속이나 고백, 유저가 기억해야 할 디테일을 포함한다. "
     "유저가 자기 이름을 말했으면 「유저 이름: ○○」을 꼭 남긴다. "
+    "서아가 직접 한 제안·약속·발언과 유저의 고백·약속을 가장 먼저 남긴다. "
     "한국어로 10문장 이내, 요약문만 출력한다."
 )
 
@@ -175,6 +174,9 @@ def new_state() -> dict:
         "name_state": "none",     # NAME_STATES
         "judge_soon": False,      # name_state 가 asked·refused 면 true: 앱이 다음 답마다 바로 판정
         "name_quiet": 0,          # S2-1: 이름 사건 뒤 무작위 사건을 쉬는 남은 유저 메시지 수
+        "stage_notes": {},        # S3: 끝난 단계마다 한 문장 {"1": "…"} (본편만, 요약이 바뀌어도 그대로)
+        "stage_note_due": None,   # S3: 다음 판정에 한 문장을 부탁할 끝난 단계 번호
+        "promises": [],           # S3: 서아가 한 제안·약속 최근 PROMISES_MAX 개 (본편만)
     }
 
 
@@ -276,6 +278,18 @@ def normalize_state(raw: dict | None) -> dict:
     except (TypeError, ValueError):
         state["name_quiet"] = 0
     state["recent_lines"] = [str(x) for x in state["recent_lines"]][-3:]
+    notes = state["stage_notes"] if isinstance(state["stage_notes"], dict) else {}
+    state["stage_notes"] = {
+        str(k): v.strip()[:MEMO_MAX_LEN] for k, v in notes.items()
+        if str(k) in {str(n) for n in STAGE_NAMES} and isinstance(v, str) and v.strip()
+    }
+    try:
+        due = int(state["stage_note_due"]) if state["stage_note_due"] is not None else None
+    except (TypeError, ValueError):
+        due = None
+    state["stage_note_due"] = due if due in STAGE_NAMES else None
+    promises = state["promises"] if isinstance(state["promises"], list) else []
+    state["promises"] = [x.strip()[:MEMO_MAX_LEN] for x in promises if isinstance(x, str) and x.strip()][-PROMISES_MAX:]
     state["stage_flags"] = [f for f in state["stage_flags"] if f in ALLOWED_FLAGS - NAME_FLAGS]
     if not isinstance(state["used_events"], dict):
         state["used_events"] = {}
@@ -487,9 +501,12 @@ class Engine:
         if not state["episode"]:  # 대화량 점수·메시지 수는 본 이야기만
             msgs = [m.strip() for m in (last_user or "").split("\n") if m.strip()]
             state["name_quiet"] = max(0, min(NAME_QUIET_MSGS, state["name_quiet"]) - len(msgs))
-            judge["talk_bonus"] = min(self._talk_bonus(msgs, judge), TALK_BONUS_STAGE_MAX - state["stage_bonus"])
+            judge["talk_bonus"] = max(0, min(self._talk_bonus(msgs, judge), TALK_BONUS_STAGE_MAX - state["stage_bonus"]))
             state["stage_user_msgs"] += len(msgs)
-        changes = self._apply(state, judge, None, last_reply)
+        changes = [] if state["episode"] else self._remember(state, judge)
+        changes += self._apply(state, judge, None, last_reply)
+        if not state["episode"] and state["stage"] != stage_before:
+            state["stage_note_due"] = stage_before  # S3: 끝난 단계. 다음 판정에 한 문장을 부탁함
         if not state["episode"]:
             need = MIN_STAGE_MSGS.get(state["stage"], 0)
             progress = {
@@ -539,6 +556,11 @@ class Engine:
             "summary": state["summary"] or "아직 없음 (이야기의 시작)",
             "recent_lines": "\n".join(f"- {x}" for x in state.get("recent_lines", [])[-3:]) or "- 없음",
             "user_name": state.get("user_name") or "없음",
+            "stage_notes": "\n".join(
+                f"  - {k}단계({STAGE_NAMES[int(k)]}): {v}"
+                for k, v in sorted((state.get("stage_notes") or {}).items(), key=lambda kv: int(kv[0]))
+            ) or "  - 없음",
+            "promises": "\n".join(f"  - {x}" for x in state.get("promises") or []) or "  - 없음",
             "name_josa": name_josa(state.get("user_name") or ""),
             "name_call": name_call(state),
         }
@@ -646,23 +668,9 @@ class Engine:
     # ---------- 사건 ----------
     @staticmethod
     def _talk_bonus(msgs: list[str], judge: dict) -> int:
-        """판정 한 번(최대 3턴)의 유저 메시지 글자 수로 주는 보너스. 짧은 메시지에 감점은 없음."""
-        if judge["affection_delta"] < 0:
-            return 0
-        seen, lengths = set(), []
-        for m in msgs:
-            text = re.sub(r"\s+", " ", m).strip()
-            key = re.sub(r"\s+", "", text)
-            plain = "".join(ch for ch in NOT_TALK.sub("", text) if ord(ch) < 0x2600 or 0xAC00 <= ord(ch) <= 0xD7A3)
-            if (text.startswith("[유저가 선물함:") or POSE_REQUEST.match(text) or not plain or key in seen):
-                lengths.append(0)  # 선물 줄·포즈 부탁·ㅋㅎ·기호·이모지만·같은 말 반복은 글자 수에서 뺌
-            else:
-                lengths.append(min(len(key), TALK_MAX_COUNT))
-            seen.add(key)
-        long_n = sum(n >= TALK_LONG for n in lengths)
-        if len(msgs) >= 3 and long_n == len(msgs) and TALK_BONUS_FLAGS & set(judge["flags"]):
-            return 2
-        return 1 if long_n >= 2 else 0
+        """S3: 메시지 길이 보너스를 없앰. 언제나 0.
+        talk_bonus·stage_bonus 필드는 앱 호환을 위해 그대로 두고 값만 0 (예전 계산은 git 기록 [S3-B] 이전)."""
+        return 0
 
     @staticmethod
     def _tick_scene(state: dict) -> None:
@@ -813,9 +821,12 @@ class Engine:
                 for m in (recent or [])[-24:] if m.get("r") in ("u", "c")
             )
             prompt += f"\n\n[요약 요청]\n기존 요약과 아래 최근 대화를 합쳐 summary를 채운다.\n[최근 대화]\n{convo or '없음'}"
+        due = None if state["episode"] else state.get("stage_note_due")
+        if due:  # S3: 끝난 단계를 한 문장으로
+            prompt += f"\n\n[단계 기록 요청] {due}단계({STAGE_NAMES[due]})를 한 문장으로"
         prompt += f"\n\n[유저]\n{user_message}\n\n[서아]\n{reply}"
         neutral = {"affection_delta": 0, "flags": [], "time_advance": False,
-                   "time_of_day": "", "summary": "", "reason": "판정 실패"}
+                   "time_of_day": "", "summary": "", "stage_note": "", "promise": "", "reason": "판정 실패"}
         try:
             raw = self.llm.complete(self.blocks["JUDGE_SYSTEM"], prompt, json_mode=True)
             match = re.search(r"\{.*\}", raw, re.S)
@@ -834,10 +845,27 @@ class Engine:
             "time_advance": bool(data.get("time_advance", False)),
             "time_of_day": str(data.get("time_of_day") or "").strip(),
             "summary": str(data.get("summary") or "").strip(),
+            "stage_note": str(data.get("stage_note") or "").strip() if due else "",
+            "promise": str(data.get("promise") or "").strip(),
             "reason": str(data.get("reason", "")),
         }
 
     # ---------- 상태 갱신 ----------
+    @staticmethod
+    def _remember(state: dict, judge: dict) -> list[str]:
+        """S3 기억(본편만): 부탁한 단계 기록을 stage_notes 에, 서아의 약속·제안을 promises 에."""
+        changes = []
+        due, note = state.get("stage_note_due"), (judge.get("stage_note") or "")[:MEMO_MAX_LEN]
+        if due and note:
+            state["stage_notes"][str(due)] = note  # 이미 있으면 덮어씀
+            state["stage_note_due"] = None
+            changes.append(f"{due}단계 기록 저장")
+        promise = (judge.get("promise") or "")[:MEMO_MAX_LEN]
+        if promise and promise not in state["promises"]:
+            state["promises"] = (state["promises"] + [promise])[-PROMISES_MAX:]
+            changes.append("서아의 말·약속 기록")
+        return changes
+
     def _apply(self, state: dict, judge: dict, event: str | None, last_reply: str = "") -> list[str]:
         changes = []
 

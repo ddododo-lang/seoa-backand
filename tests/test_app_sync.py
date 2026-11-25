@@ -36,9 +36,10 @@ def engine(llm=None):
 class ToneTest(unittest.TestCase):  # 6
     def test_rules_in_prompt(self):
         system = engine()._build_system(normalize_state({}), None, MOTIONS)
-        self.assertIn("설명하지 않는다. 이유·사정을 덧붙이지 않는다.", system)
-        self.assertIn("dialogue는 서아의 대사 한두 마디", system)
-        self.assertNotIn("대사 1~3문장", system)
+        # S3: 「한두 마디·설명하지 않는다」를 「대사 1~3문장, 단답으로만 끝내지 않기」로 바꿈
+        self.assertNotIn("설명하지 않는다. 이유·사정을 덧붙이지 않는다.", system)
+        self.assertNotIn("dialogue는 서아의 대사 한두 마디", system)
+        self.assertIn("대사는 1~3문장. 짧고 툭 던지는 말투는 그대로지만, 단답 한 마디로만 끝내지 않는다.", system)
 
 
 class HistoryLinesTest(unittest.TestCase):  # 7

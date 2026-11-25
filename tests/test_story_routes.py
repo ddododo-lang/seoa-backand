@@ -199,19 +199,20 @@ class TalkBonusTest(unittest.TestCase):  # 5
                   affection_delta=delta, flags=list(flags))
         return r["progress"]["talk_bonus"], r
 
-    def test_rules(self):
+    def test_rules(self):  # S3: 길이 보너스를 없앰. 긴 메시지도 언제나 0
         self.assertEqual(self.bonus(["응", "뭐해?", "ㅋㅋ"])[0], 0)
-        self.assertEqual(self.bonus(LONG)[0], 2)
-        self.assertEqual(self.bonus(LONG, flags=())[0], 1)
-        self.assertEqual(self.bonus(LONG[:2] + ["응"])[0], 1)
-        self.assertEqual(self.bonus([LONG[0]] * 3)[0], 0)  # 같은 말 반복
+        self.assertEqual(self.bonus(LONG)[0], 0)
+        self.assertEqual(self.bonus(LONG, flags=())[0], 0)
+        self.assertEqual(self.bonus(LONG[:2] + ["응"])[0], 0)
         self.assertEqual(self.bonus(LONG, delta=-1)[0], 0)
-        gift = "[유저가 선물함: 사탕] " + LONG[0]
-        self.assertEqual(self.bonus([gift, "도발하기 해 줄래?", "ㅋ" * 60])[0], 0)
+        _, r = self.bonus(LONG, delta=2)
+        self.assertEqual(r["state"]["affection"], 22)  # 판정 점수만
 
     def test_cap_per_stage_and_reset(self):
         b, r = self.bonus(LONG, stage_bonus=7)
-        self.assertEqual((b, r["state"]["stage_bonus"]), (1, 8))
+        self.assertEqual((b, r["state"]["stage_bonus"]), (0, 7))
+        b, r = self.bonus(LONG, stage_bonus=12)  # 예전 앱이 상한보다 큰 값을 보내도 감점 없음
+        self.assertEqual((b, r["state"]["affection"]), (0, 21))
         st = normalize_state({"stage": 1, "stage_bonus": 8, "stage_user_msgs": 9})
         Engine._advance(st, 2, [])
         self.assertEqual((st["stage_bonus"], st["stage_user_msgs"]), (0, 0))

@@ -83,6 +83,7 @@ TALK_BONUS_STAGE_MAX = 8   # 단계마다 보너스 합계 상한(단계가 오�
 MIN_STAGE_MSGS = {2: 15, 3: 20, 4: 15}  # 그 단계에서 이만큼 유저 메시지를 보내야 다음 단계로(1→2·5→6 없음)
 NOT_TALK = re.compile(r"[\sㅋㅎㅠㅜㄷㄱ~!?.,…·\-_^*()\[\]<>:;'\"0-9]+")  # 이것만 있으면 「글」이 아님(이모지는 따로 뺌)
 GIFT_MOMENT_GAP = 10       # 같은 순간 선물은 준 뒤 유저 메시지 이만큼 지나야 다시 엶
+FIRST_NIGHT_TURNS = 3     # 첫날 밤 사정(손등의 피)은 유저 메시지 이만큼까지만 넣음. 그 뒤엔 같은 묘사가 반복되지 않게 뺌
 GIFT_MOMENT_QUIET = 3      # 순간 선물을 준 뒤 이만큼은 어떤 순간 선물도 열지 않음(자주 넣지 않기)
 # 조연 (앱 54): 갈래마다 한 명, 나올 때마다 한 걸음씩(처음 1 → 두 번째 2 → 마무리 3)
 SIDE_CHARS = ("MARI", "TAEO")
@@ -288,6 +289,7 @@ class Engine:
         state = normalize_state(state)
         state["gift_moments"] = self._open_moments(state["gift_moments"], history, user_message)
         state["_xmas_late"] = self._xmas_late(state, history)
+        state["_first_night"] = sum(1 for h in history if h.get("r") == "u") < FIRST_NIGHT_TURNS
         event = state["pending_event"]
         system = self._build_system(state, event, motion_list)
         opening = self.blocks["OPENING"].strip()
@@ -515,7 +517,7 @@ class Engine:
         if state["gift_moments"]:  # 앱 50: 열 수 있는 순간 선물이 있을 때만
             values["gift_moments"] = "\n".join(f"- {g['id']} {g['name']}: {g['when']}" for g in state["gift_moments"])
             parts.append(render(self.blocks["GIFT_MOMENT"], values))
-        if state["day"] == 1:  # 앱 37 골목 프롤로그: 첫날 밤에만
+        if state["day"] == 1 and state.get("_first_night", True):  # 앱 37 골목 프롤로그: 첫날 밤, 처음 몇 턴만(계속 넣으면 매 답장에 손등의 피가 나옴)
             parts.append(self.blocks["FIRST_NIGHT"])
         parts += [
             render(self.blocks[f"STAGE_{state['stage']}"], values),

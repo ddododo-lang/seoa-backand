@@ -17,7 +17,7 @@ from llm import BUDGET_SEC, LLMUnavailable
 from prompt_loader import load_blocks, render
 
 # ---------- 게임 규칙 (여기서 조정) ----------
-STAGE_NAMES = {1: "신경전", 2: "단골", 3: "끌림", 4: "고백 직전", 5: "엇갈림", 6: "연인"}
+STAGE_NAMES = {1: "경계", 2: "티키타카", 3: "썸", 4: "고백 직전", 5: "엇갈림", 6: "연인"}  # 앱 단계 이름과 같게
 AFFECTION_CAP = {1: 30, 2: 50, 3: 70, 4: 85, 5: 95, 6: 100}
 STAGE_EVENTS = {
     1: ["INJURY", "TAEO"],

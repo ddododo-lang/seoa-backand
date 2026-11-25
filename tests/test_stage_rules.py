@@ -36,3 +36,17 @@ class Stage1To2Test(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StageNamesTest(unittest.TestCase):
+    """서버 단계 이름 = 앱 단계 이름 (앱 13단계부터)."""
+
+    def test_names_match_app(self):
+        from engine import STAGE_NAMES
+        self.assertEqual(list(STAGE_NAMES.values()), ["경계", "티키타카", "썸", "고백 직전", "엇갈림", "연인"])
+
+    def test_prompt_headings_match(self):
+        from engine import STAGE_NAMES
+        text = (Path(__file__).resolve().parent.parent / "yoon_seoa_prompt.md").read_text(encoding="utf-8")
+        for n, name in STAGE_NAMES.items():
+            self.assertIn(f"# 단계 지침 — {n}. {name}", text)

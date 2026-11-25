@@ -52,6 +52,7 @@ SHORT_MESSAGE_LEN = 20      # 이보다 짧은 유저 메시지는 '짧은 답'
 SHORT_STREAK_TRIGGER = 3    # 짧은 답이 이만큼 연속되면 사건 발동
 QUIET_TURNS_TRIGGER = 15    # 사건 없이 이만큼 지나면 사건 발동
 EVENT_COOLDOWN = 20         # 같은 사건을 다시 쓰기까지 필요한 턴 수
+STAGE_UP_SCENES = {2, 3, 4, 6}  # 단계가 오른 다음 답장에 한 번 넣는 상징 장면(STAGE_UP_n). 5는 DEPARTURE
 DEPARTURE_DAYS = 7          # 5단계 출발까지 남은 날
 SUMMARY_TRIGGER = 40        # 요약 안 된 메시지가 이만큼 쌓이면 요약
 KEEP_RECENT = 20            # 요약 후에도 원문으로 남겨 둘 최근 메시지 수
@@ -123,7 +124,8 @@ def normalize_state(raw: dict | None) -> dict:
     ev = state["pending_event"]
     if isinstance(ev, str):
         ev = ev.removeprefix("EVENT_")
-        state["pending_event"] = ev if ev in {e for v in STAGE_EVENTS.values() for e in v} | {"DEPARTURE"} else None
+        known = {e for v in STAGE_EVENTS.values() for e in v} | {"DEPARTURE"} | {f"STAGE_UP_{n}" for n in STAGE_UP_SCENES}
+        state["pending_event"] = ev if ev in known else None
     else:
         state["pending_event"] = None
     state["recent_lines"] = [str(x) for x in state["recent_lines"]][-3:]
@@ -357,6 +359,8 @@ class Engine:
         ]
         if event and f"EVENT_{event}" in self.blocks:
             parts.append(self.blocks[f"EVENT_{event}"])
+        elif event and event.startswith("STAGE_UP_") and event in self.blocks:
+            parts.append(self.blocks[event])  # 단계 오른 직후 한 번: 앱이 답장 뒤 pending_event 를 비움
         return "\n\n".join(parts)
 
     @staticmethod
@@ -500,6 +504,8 @@ class Engine:
         state["stage"] = nxt
         state["stage_flags"] = []
         changes.append(f"단계 상승 → {nxt}. {STAGE_NAMES[nxt]}")
+        if nxt in STAGE_UP_SCENES:
+            state["pending_event"] = f"STAGE_UP_{nxt}"  # 다음 답장에 그 단계의 상징 장면 (다른 사건보다 먼저)
         if nxt == 4 and "비밀1" not in state["revealed_secrets"]:
             state["revealed_secrets"].append("비밀1")  # 4단계 지침대로 1년 전 이야기를 털어놓게 함
             changes.append("비밀1 공개")

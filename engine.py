@@ -84,6 +84,10 @@ MIN_STAGE_MSGS = {2: 15, 3: 20, 4: 15}  # 그 단계에서 이만큼 유저 메�
 NOT_TALK = re.compile(r"[\sㅋㅎㅠㅜㄷㄱ~!?.,…·\-_^*()\[\]<>:;'\"0-9]+")  # 이것만 있으면 「글」이 아님(이모지는 따로 뺌)
 GIFT_MOMENT_GAP = 10       # 같은 순간 선물은 준 뒤 유저 메시지 이만큼 지나야 다시 엶
 GIFT_MOMENT_QUIET = 3      # 순간 선물을 준 뒤 이만큼은 어떤 순간 선물도 열지 않음(자주 넣지 않기)
+# 조연 (앱 54): 갈래마다 한 명, 나올 때마다 한 걸음씩(처음 1 → 두 번째 2 → 마무리 3)
+SIDE_CHARS = ("MARI", "TAEO")
+SIDE_STEP_KEYS = ("mari_step", "taeo_step")
+SIDE_OF_ROUTE = {"tease": "MARI", "care": "TAEO"}
 DEPARTURE_DAYS = 3          # 5단계 출발까지 남은 날 (앱 51: 7일 → 사흘)
 # 남은 날이 줄어든 다음 답장의 action 맨 앞에 한 번 붙이는 지문 (pending_event 로 전달, 앱이 답장 뒤 비움)
 DAY_MARKERS = {
@@ -132,6 +136,8 @@ def new_state() -> dict:
         "episode_stage": None,    # 에피소드만의 단계 1~6 (앱이 정함)
         "episode_stage_name": "", # 에피소드 단계 이름 (앱 이름)
         "episode_turns_left": None,  # 크리스마스: 자정까지 남은 유저 메시지 수 (앱이 셈)
+        "mari_step": 0,           # 앱 54 조연 차례: 0 아직 · 1 처음 · 2 두 번째 · 3 마무리(또는 닫힘)
+        "taeo_step": 0,
     }
 
 
@@ -160,6 +166,11 @@ def normalize_state(raw: dict | None) -> dict:
         for g in (state["gift_moments"] if isinstance(state["gift_moments"], list) else [])
         if isinstance(g, dict) and str(g.get("id") or "").strip()
     ][:6]
+    for key in SIDE_STEP_KEYS:  # 조연 차례는 0~3 정수만
+        try:
+            state[key] = max(0, min(3, int(state[key])))
+        except (TypeError, ValueError):
+            state[key] = 0
     for key in ("stage_bonus", "stage_user_msgs"):
         try:
             state[key] = max(0, int(state[key]))

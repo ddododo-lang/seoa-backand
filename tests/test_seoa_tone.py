@@ -37,9 +37,11 @@ def system_for(state, e=None):
 
 class SecondFloorTest(unittest.TestCase):  # 1
     def test_rule_in_base_system(self):
-        base = engine().blocks["BASE_SYSTEM"]
+        e = engine()
+        base = e.blocks["MAIN_WORLD"]  # S1: 2층 원칙·규칙 13 의 2층 줄은 본편 블록으로 옮김
         self.assertIn("2층(사장님 집)에서는 서아가 먼저 다가가지 않는다", base)
-        self.assertIn("크리스마스의 자취방은 반대로 서아가 먼저 다가간다", base)
+        self.assertNotIn("크리스마스의 자취방은 반대로 서아가 먼저 다가간다", base)  # S1: 지움(크리스마스 블록에 있음)
+        self.assertIn("서아가 유혹하고 다가가는 쪽이다", e.blocks["EPISODE_XMAS"])
         self.assertIn("단, 바 '라스트 오더' 2층에서는 피하지 않는다", base)  # 규칙 13 「피한다」와 충돌하지 않게
         self.assertIn("물러나거나 밀어내지 않고", base)
 

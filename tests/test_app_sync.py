@@ -132,7 +132,7 @@ class GiftTest(unittest.TestCase):  # 13 (앱 49·50)
 
     def test_examples_follow_length_rule(self):
         import re
-        base = engine().blocks["BASE_SYSTEM"]
+        base = engine().blocks["MAIN_WORLD"]  # S1: [예시]는 본편 블록으로 옮김
         for d in re.findall(r'"dialogue": "([^"]+)"', base):
             self.assertLessEqual(len([x for x in re.split(r"[.?!…]+\s*", d) if x.strip()]), 2, d)
 

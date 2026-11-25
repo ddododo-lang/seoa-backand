@@ -499,21 +499,25 @@ class Engine:
             for m in (motion_list or []) if isinstance(m, dict) and m.get("id")
         ]
         values["motion_list"] = "\n".join(lines) or "(지금은 없음. motion_id는 null)"
-        parts = [
-            self.blocks["BASE_SYSTEM"],
-            render(self.blocks["STATE_BLOCK"], values),
-        ]
+        parts = [self.blocks["BASE_SYSTEM"]]
         episode = EPISODES.get(state.get("episode") or "")
-        if episode:  # 본 이야기 STAGE_n·EVENT_*·첫날 줄 대신 에피소드 블록 (판정은 그대로)
+        if episode:  # 본편 세계(MAIN_WORLD)·상태·STAGE_n·EVENT_*·첫날 줄 대신 에피소드 블록 (판정은 그대로)
             if state.get("_xmas_late"):  # reply() 가 구간·기록을 보고 정함
                 values["xmas_late"] = state["_xmas_late"]
+            ep_state = self.blocks["EPISODE_STATE"]
+            if state.get("episode_turns_left") is None:  # 앱이 안 보내면 「자정까지」 줄을 통째로 뺀다
+                ep_state = "\n".join(x for x in ep_state.split("\n") if "{{episode_turns_left}}" not in x)
+            else:
+                values["episode_turns_left"] = state["episode_turns_left"]
             parts += [
+                render(ep_state, values),
                 render(self.blocks[episode["block"]], values),
                 *([render(self.blocks["XMAS_LATE"], values)] if "xmas_late" in values else []),
                 render(self.blocks["MOTION_BLOCK"], values),
                 self.blocks["OUTPUT_FORMAT"],
             ]
             return "\n\n".join(parts)
+        parts += [self.blocks["MAIN_WORLD"], render(self.blocks["STATE_BLOCK"], values)]
         if state["gift_moments"]:  # 앱 50: 열 수 있는 순간 선물이 있을 때만
             values["gift_moments"] = "\n".join(f"- {g['id']} {g['name']}: {g['when']}" for g in state["gift_moments"])
             parts.append(render(self.blocks["GIFT_MOMENT"], values))

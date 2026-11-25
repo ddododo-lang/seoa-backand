@@ -95,6 +95,9 @@ SIDE_SCENE_STAGES = {  # 조연 → 차례(1 처음, 2 두 번째) → 나올 �
 OTHER_ROUTE_FIRST = {"MARI": {3}, "TAEO": {1, 2}}  # 다른 갈래의 조연은 이 단계에서 「처음」 한 번만, 나오면 닫음
 SIDE_WEIGHT = 2              # 갈래가 정해지면 그 갈래 조연을 두 배 자주
 SIDE_EVENTS = {f"{c}_{n}" for c in SIDE_CHARS for n in (1, 2, 3)}  # pending_event 값: 조연_차례
+ENDINGS = ("stayed", "departed")  # 성공(앱 54, 6단계 첫 아침·조연 마무리 뒤) · 실패(5단계 남은 날 0)
+STAYED_MAX_MSGS = 15         # 6단계 유저 메시지가 이만큼 되면 조연 마무리 없이 stayed
+MORNING_KEYS = {"tease": ("셔츠", "빌렸어"), "care": ("해뜨는것도",)}  # 첫 아침 원고 대사(공백 빼고)가 답장에 있으면 첫 아침이 나온 것
 DEPARTURE_DAYS = 3          # 5단계 출발까지 남은 날 (앱 51: 7일 → 사흘)
 # 남은 날이 줄어든 다음 답장의 action 맨 앞에 한 번 붙이는 지문 (pending_event 로 전달, 앱이 답장 뒤 비움)
 DAY_MARKERS = {
@@ -130,7 +133,8 @@ def new_state() -> dict:
         "used_events": {},        # 사건 이름 -> 마지막으로 쓴 턴
         "pending_event": None,    # 다음 턴에 반드시 넣을 사건
         "summarized_upto": 0,     # 이 메시지 id까지는 요약에 들어감 (세션 방식에서만 씀)
-        "ending": None,           # None | "lovers" | "departed"
+        "ending": None,           # None | "stayed"(성공, 그 뒤에도 그대로 둠) | "departed"(실패)
+        "morning_done": False,    # 6단계 첫 아침 장면이 나왔는지 (서버가 판정에서 정함)
         "recent_lines": [],       # 직전 서아 응답 3개 (반복 방지)
         "route": None,            # 갈래 "tease" | "care" | None (앱 51이 정함, 서버는 읽기만)
         "scene": None,            # 진행 중인 갈래 장면(ROUTE_SCENES). 판정이 정하고 앱이 돌려보냄
@@ -183,6 +187,9 @@ def normalize_state(raw: dict | None) -> dict:
             state[key] = max(0, int(state[key]))
         except (TypeError, ValueError):
             state[key] = 0
+    if state["ending"] not in ENDINGS:  # 예전 "lovers" 는 None 으로 (6단계 성공 신호는 이제 stayed)
+        state["ending"] = None
+    state["morning_done"] = state["morning_done"] is True
     if state["route"] not in ROUTES:
         state["route"] = None
     if state["scene"] not in ROUTE_SCENES:
@@ -442,6 +449,8 @@ class Engine:
             route_event = self._route_event(state)
             if route_event:
                 self._start_route_scene(state, route_event, changes)
+            if stage_before == 6:  # 6단계: 첫 아침 → 그 갈래 조연 마무리 → stayed (오른 판정은 STAGE_UP_6 차례)
+                self._side_finale(state, last_reply, judge, changes)
         # 에피소드 중에는 앱이 단계·장면을 정하므로 사건 계산을 건너뛴다 (단계 상승은 _apply에서 건너뜀)
         nxt_event = None if state["episode"] else self._tick_events(state, last_user)
         if nxt_event:
@@ -515,8 +524,8 @@ class Engine:
         ]
         if state["stage"] == 5 and state["route"] and state["departure_days_left"] is not None:
             parts.append(self.blocks[f"ROUTE_PURSUE_{state['route'].upper()}"])
-        if state["stage"] == 6 and state["route"]:
-            parts.append(self.blocks[f"ROUTE_MORNING_{state['route'].upper()}"])
+        if state["stage"] == 6 and state["route"] and not state["morning_done"] and state["ending"] != "stayed":
+            parts.append(self.blocks[f"ROUTE_MORNING_{state['route'].upper()}"])  # 첫 아침이 나오면 다시 넣지 않음
         if event in ("MARI", "TAEO"):  # 예전 값: 차례로 고름
             event = f"{event}_{max(1, min(3, state[event.lower() + '_step']))}"
         if event and f"EVENT_{event}" in self.blocks:  # 이번 답장의 사건(시작 턴)
@@ -600,8 +609,8 @@ class Engine:
         else:
             state["short_streak"] = 0
 
-        if state["pending_event"] or state["ending"]:
-            return None  # 이미 예약된 사건(DEPARTURE 등)이 있거나 엔딩 이후
+        if state["pending_event"] or state["ending"] == "departed":
+            return None  # 이미 예약된 사건(DEPARTURE 등)이 있거나 실패 엔딩 뒤. stayed 뒤에는 연인 일상 사건이 이어짐
         if (
             state["short_streak"] < SHORT_STREAK_TRIGGER
             and state["turns_since_event"] < QUIET_TURNS_TRIGGER
@@ -640,6 +649,36 @@ class Engine:
             return 1 if step == 0 and stage in OTHER_ROUTE_FIRST[name] else None
         n = step + 1
         return n if n in SIDE_SCENE_STAGES[name] and stage in SIDE_SCENE_STAGES[name][n] else None
+
+    @staticmethod
+    def _side_finale(state: dict, last_reply: str, judge: dict, changes: list[str]) -> None:
+        """6단계: 첫 아침이 나온 다음 판정에서 그 갈래 조연 마무리를 넣고, 그게 나온 다음 판정에서 stayed.
+        마무리가 늦어져 6단계 유저 메시지가 STAYED_MAX_MSGS 가 되면 마무리 없이 stayed."""
+        if state["ending"]:
+            return  # stayed 는 한 번 정하면 그대로(앱은 한 번만 띄움), departed 는 6단계에 없음
+        route, pend = state["route"], state["pending_event"] or ""
+        name = SIDE_OF_ROUTE.get(route or "")
+        side_pending = pend in SIDE_EVENTS or pend in SIDE_CHARS
+        finale_shown = bool(name) and state[f"{name.lower()}_step"] >= 3 and not side_pending
+        if (state["morning_done"] and finale_shown) or (
+                state["stage_user_msgs"] >= STAYED_MAX_MSGS and not side_pending):
+            why = "조연 마무리 뒤" if state["morning_done"] and finale_shown else f"6단계 메시지 {state['stage_user_msgs']}개"
+            state["ending"] = "stayed"
+            state["mari_step"] = state["taeo_step"] = 3  # 마무리는 다시 나오지 않음
+            changes.append(f"엔딩: 서아가 남음 (stayed, {why})")
+            return
+        if name and state["morning_done"] and state[f"{name.lower()}_step"] < 3 and not pend:
+            state["pending_event"] = f"{name}_3"  # 사건 발동 조건(짧은 답·15턴)을 기다리지 않음
+            state[f"{name.lower()}_step"] = 3
+            state["used_events"][name] = state["turn"]
+            state["short_streak"], state["turns_since_event"] = 0, 0
+            changes.append(f"조연 마무리: {name}_3")
+        if not state["morning_done"]:
+            text = re.sub(r"\s+", "", last_reply or "")
+            keys = MORNING_KEYS.get(route or "")
+            if (keys and all(k in text for k in keys)) or judge.get("time_advance"):
+                state["morning_done"] = True  # 마무리는 다음 판정에서 (첫 아침 장면이 닫힌 뒤)
+                changes.append("6단계 첫 아침 지남")
 
     @staticmethod
     def _side_step(state: dict, event: str) -> None:
@@ -778,8 +817,7 @@ class Engine:
             state["pending_event"] = "DEPARTURE"  # 다음 턴에 떠난다는 소식을 꺼냄
             changes.append(f"출발까지 {DEPARTURE_DAYS}일")
         if nxt == 6:
-            state["departure_days_left"] = None
-            state["ending"] = "lovers"
+            state["departure_days_left"] = None  # 성공 엔딩 stayed 는 첫 아침·조연 마무리 뒤 _side_finale 이 정함
 
     # ---------- 요약 ----------
     def _maybe_summarize(self, sid: str, state: dict) -> None:

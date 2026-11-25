@@ -29,6 +29,8 @@ STAGE_EVENTS = {
 }
 ALLOWED_FLAGS = {"care", "protect", "outside", "sincere", "pursue", "tease", "comfort", "reveal_secret1"}
 ROUTES = ("tease", "care")  # 앱 51 갈래
+# 크리스마스(s2) 자정 기색: 자정까지 남은 유저 메시지 수 → 그 턴에 한 번 (에피소드 단계 4 미만일 때만, 점점 분명하게)
+XMAS_LATE = {10: "「…밤 꽤 깊었네.」", 5: "「슬슬 들어가야겠다.」", 2: "*서아가 장갑을 끼며 한 걸음 물러선다.*"}
 # 특별 에피소드(앱 42, server-sync.md): state.episode 로 오고, 본 이야기 단계 지침·사건 대신 블록을 넣는다
 EPISODES = {
     "s2": {"block": "EPISODE_XMAS", "locations": ["크리스마스 거리", "서아의 자취방"]},
@@ -124,6 +126,7 @@ def new_state() -> dict:
         "episode": None,          # 특별 에피소드 id (앱 42: "s2"). 없으면 본 이야기
         "episode_stage": None,    # 에피소드만의 단계 1~6 (앱이 정함)
         "episode_stage_name": "", # 에피소드 단계 이름 (앱 이름)
+        "episode_turns_left": None,  # 크리스마스: 자정까지 남은 유저 메시지 수 (앱이 셈)
     }
 
 
@@ -170,8 +173,12 @@ def normalize_state(raw: dict | None) -> dict:
         except (TypeError, ValueError):
             state["episode_stage"] = 1
         state["episode_stage_name"] = str(state["episode_stage_name"] or "").strip()[:20]
+        try:
+            state["episode_turns_left"] = max(0, int(state["episode_turns_left"]))
+        except (TypeError, ValueError):
+            state["episode_turns_left"] = None
     else:
-        state["episode_stage"], state["episode_stage_name"] = None, ""
+        state["episode_stage"], state["episode_stage_name"], state["episode_turns_left"] = None, "", None
     if state["location"] not in allowed_locations(state):
         state["location"] = allowed_locations(state)[0]
     ev = state["pending_event"]
@@ -451,8 +458,12 @@ class Engine:
         ]
         episode = EPISODES.get(state.get("episode") or "")
         if episode:  # 본 이야기 STAGE_n·EVENT_*·첫날 줄 대신 에피소드 블록 (판정은 그대로)
+            late = XMAS_LATE.get(state["episode_turns_left"]) if state["episode"] == "s2" else None
+            if late and state["episode_stage"] < 4:  # 4단계(서아가 집으로 데려감) 이상이면 기색 없음
+                values["xmas_late"] = late
             parts += [
                 render(self.blocks[episode["block"]], values),
+                *([render(self.blocks["XMAS_LATE"], values)] if "xmas_late" in values else []),
                 render(self.blocks["MOTION_BLOCK"], values),
                 self.blocks["OUTPUT_FORMAT"],
             ]

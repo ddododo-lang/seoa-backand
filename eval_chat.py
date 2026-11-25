@@ -8,6 +8,9 @@
     python eval_chat.py --scenario pose             # 하나만
     python eval_chat.py --scenario storm2f --pause 10   # 2층 폭우: 서아가 먼저 다가가면 ❌
     python eval_chat.py --scenario stageup4 --pause 10  # 3→4 단계 상승 다음 턴: 지어낸 이름이면 ❌
+    python eval_chat.py --scenario side_mari --pause 10   # 조연·성공 엔딩: side_mari · side_taeo · departure_taeo
+                                                          # · side_finale_tease · side_finale_care · stayed_15
+                                                          # · stayed_no_side · care_mari_once (뒤 둘은 규칙만, 모델 안 씀)
 
 앱과 같은 방식(상태 없는 /chat → /judge)으로 엔진을 직접 호출한다. 서버를 켤 필요는 없다.
 대화 전문은 eval_result.md에 저장된다.
@@ -304,9 +307,71 @@ JUDGE_SCENARIOS = {
         "state": {"stage": 5, "affection": 80, "day": 10, "route": "care", "departure_days_left": 3},
         "steps": ["(밤이 지나고 다음 날 아침, 바 문을 연다)"], "want": "marker",
     },
+    "stayed_15": {  # 6단계 메시지 15개 → 조연 마무리 없이 stayed
+        "state": {"stage": 6, "affection": 96, "day": 15, "route": "tease", "mari_step": 2, "stage_user_msgs": 13},
+        "steps": ["좋아.\n오늘은 같이 문 닫자."], "want": "stayed",
+    },
     "departed": {  # 사흘 뒤 pursue 없음 → ending departed
         "state": {"stage": 5, "affection": 80, "day": 12, "route": "care", "departure_days_left": 1},
         "steps": ["(밤이 지나고 다음 날 아침이 됐다. 창가 자리는 비어 있다)"], "want": "departed",
+    },
+}
+MORNING_TEASE = "*서아가 먼저 깨 있다. 당신 셔츠를 입고, 커피를 엉망으로 내리는 중이다.* 셔츠, 빌렸어. 돌려줄 생각은 없고."
+MORNING_CARE = "*당신 어깨에 기대 잠들었던 서아가 눈을 뜬다. 하늘이 밝아 온다.* …해 뜨는 것도, 처음 봐."
+S6_HISTORY = [{"r": "c", "t": "*하이넥 칼라에서 손을 뗀다.* 매일 온 거, 술 때문 아니었어."}]
+# 조연·성공 엔딩 (feat/side-ending). steps: 판정 한 번 → (사건이 나오면) 답장 한 번
+#   set: 판정 전에 바꿀 state · last_reply: 판정에 넣을 서아 답장 · want_event / want_ending: 판정 뒤 기대
+#   user + expect: 그 사건 답장에서 찾을 원고 대사 · silent: 서아 대사가 「…」 이어야 함
+# 무작위 후보 가운데 조연이 있으면 조연을 고르게 해서(순서 확인용) 돌린다.
+SIDE_SCENARIOS = {
+    "side_mari": {  # 장난 갈래: 2~3단계 마리 처음 → 3~4단계 두 번째
+        "state": {"stage": 2, "affection": 30, "day": 4, "route": "tease", "stage_flags": ["outside"]},
+        "history": BASE_HISTORY,
+        "steps": [
+            {"want_event": "MARI_1", "user": "오늘 손님 좀 있네.", "expect": ["끝나고 뭐 해요"]},
+            {"set": {"stage": 3, "affection": 45}, "want_event": "MARI_2", "user": "마리 씨 또 왔어요?",
+             "expect": ["둘이 무슨 사이"]},
+        ],
+    },
+    "side_taeo": {  # 다정 갈래: 1~2단계 태오 처음 → 4단계 두 번째(도시 밖 의뢰 복선, 서아는 대답 안 함)
+        "state": {"stage": 2, "affection": 30, "day": 4, "route": "care", "stage_flags": ["outside"]},
+        "history": BASE_HISTORY,
+        "steps": [
+            {"want_event": "TAEO_1", "user": "오늘은 조용하네.", "expect": ["샌님", "이딴 데서"]},
+            {"set": {"stage": 4, "affection": 55}, "want_event": "TAEO_2", "user": "(문 쪽을 본다)",
+             "expect": ["도시 밖"], "silent": True},
+        ],
+    },
+    "side_finale_tease": {  # 6단계 첫 아침 → 마리 마무리 → 다음 판정 stayed
+        "state": {"stage": 6, "affection": 96, "day": 15, "route": "tease", "mari_step": 2},
+        "history": S6_HISTORY,
+        "steps": [
+            {"last_reply": MORNING_TEASE, "want_morning": True},
+            {"want_event": "MARI_3", "user": "마리 왔네.", "expect": ["졌네", "반말해도 돼"]},
+            {"want_ending": "stayed"},
+        ],
+    },
+    "side_finale_care": {  # 6단계 첫 아침 → 태오 마무리 → 다음 판정 stayed
+        "state": {"stage": 6, "affection": 96, "day": 15, "route": "care", "taeo_step": 2},
+        "history": S6_HISTORY,
+        "steps": [
+            {"last_reply": MORNING_CARE, "want_morning": True},
+            {"want_event": "TAEO_3", "user": "(문이 열리는 소리에 고개를 든다)", "expect": ["안 가"]},
+            {"want_ending": "stayed"},
+        ],
+    },
+}
+# 서버 규칙만 보는 시나리오(판정 모델 안 씀, 무작위 그대로 여러 번): 나오면 안 되는 사건이 나오면 ❌
+RULE_SCENARIOS = {
+    "stayed_no_side": {  # stayed 뒤 마리·태오 마무리 재등장 없음
+        "states": [{"stage": 6, "affection": 98, "route": r, "ending": "stayed", "morning_done": True,
+                    "mari_step": 3, "taeo_step": 3} for r in ("tease", "care")],
+        "never": ("MARI", "TAEO"), "runs": 40,
+    },
+    "care_mari_once": {  # 다정 갈래: 마리 3단계 처음 한 번 뒤로 다시 안 나옴
+        "first": {"stage": 3, "affection": 40, "route": "care"}, "first_event": "MARI_1",
+        "states": [{"stage": s, "affection": a, "route": "care"} for s, a in ((3, 40), (4, 50), (6, 96))],
+        "never": ("MARI",), "runs": 40,
     },
 }
 CHECK_SYSTEM = "너는 롤플레이 대사 검사기다. 질문에 JSON 하나로만 답한다."
@@ -340,6 +405,13 @@ def model_check(llm, kind: str, user: str, text: str) -> dict | None:
 
 SCENARIOS.update(ROUTE_SCENARIOS)
 SCENARIOS.update({k: dict(v, kind="judge") for k, v in JUDGE_SCENARIOS.items()})
+SCENARIOS["departure_taeo"] = {  # 5단계 떠난다는 말에 「태오가 가져온 일이야」 한 줄 (태오 두 번째가 없었어도)
+    "state": {"stage": 5, "affection": 76, "day": 11, "route": "tease", "departure_days_left": 3,
+              "pending_event": "DEPARTURE", "taeo_step": 1},
+    "history": BASE_HISTORY, "turns": ["오늘은 왜 그렇게 조용해?"], "expect_any": ["태오가 가져온 일"],
+}
+SCENARIOS.update({k: dict(v, kind="side") for k, v in SIDE_SCENARIOS.items()})
+SCENARIOS.update({k: dict(v, kind="rule") for k, v in RULE_SCENARIOS.items()})
 for _scene, (_gift, _state, _history) in GIFT_SCENES.items():  # 장면 셋 × 기분 맞음/안 맞음
     for _fit in (False, True):
         SCENARIOS[f"gift_{_scene}{'_fit' if _fit else ''}"] = {
@@ -359,6 +431,12 @@ def run_scenarios(which: str, pause: float = 0) -> None:
     lines, table, first = ["# 앱 맞추기 항목 점검", ""], [], True
     for name in names:
         sc = SCENARIOS[name]
+        if sc.get("kind") in ("side", "rule"):
+            out = (run_side_scenario(engine, sc, pause) if sc["kind"] == "side" else run_rule_scenario(engine, sc))
+            print(f"[{name}] " + "\n        ".join(out) + "\n")
+            lines += [f"## {name}", ""] + [f"- {x}" for x in out] + [""]
+            first = False
+            continue
         state = dict(sc["state"])
         history = list(sc.get("history", []))
         stage = state.get("episode_stage") or state["stage"]
@@ -422,7 +500,7 @@ def run_scenarios(which: str, pause: float = 0) -> None:
                 if sc.get("gift_fit"):  # 기분 맞는 선물은 care 크게
                     big = "care" in judged["flags"] and delta >= 6
                     checks.append(f"{'✅' if big else '❌'} 기분 맞는 선물 → care 크게")
-            if "expect_any" in sc:
+            if "expect_any" in sc and user == sc["turns"][0]:  # 원고 대사는 장면 첫 턴에서만 봄(둘째 턴은 다음 대목)
                 hit = any(k in text for k in sc["expect_any"])
                 checks.append(f"{'✅' if hit else '⚠ 원고 대사 없음'} {'/'.join(sc['expect_any'])}")
             if "location" in sc and user == sc["turns"][0]:
@@ -477,9 +555,90 @@ def run_judge_scenario(engine, sc) -> list[str]:
                 out.append(f"✅ 남은 날 지문: {reply['action']}")
             else:
                 out.append(f"❌ 하루가 안 넘어감(판정 time_advance {r['judge'].get('time_advance')})")
-        elif want == "departed":
-            out.append(f"{'✅' if st['ending'] == 'departed' else '❌'} 엔딩 {st['ending']}")
+        elif want in ("departed", "stayed"):
+            out.append(f"{'✅' if st['ending'] == want else '❌'} 엔딩 {st['ending']} (기대 {want})")
         state = dict(st, pending_event=None)
+    return out
+
+
+def _prefer_side(pop, weights=None, **kw):
+    """무작위 사건 후보에 조연이 있으면 조연을 고른다(차례 순서를 확인하려고)."""
+    side = [e for e in pop if e.split("_")[0] in ("MARI", "TAEO")]
+    return [side[0] if side else pop[0]]
+
+
+def run_side_scenario(engine, sc, pause: float = 0) -> list[str]:
+    """조연·성공 엔딩: 판정(실제 모델) → 사건이 나오면 답장(실제 모델) → 원고 대사·차례·엔딩 확인."""
+    from unittest import mock
+
+    state, history, out = dict(sc["state"]), list(sc.get("history", [])), []
+    for i, step in enumerate(sc["steps"]):
+        if i and pause > 0:
+            time.sleep(pause)
+        state.update(step.get("set", {}))
+        state.update(short_streak=2, turns_since_event=0, used_events={})  # 다음 판정에서 무작위 사건이 꼭 고려되게
+        with mock.patch("engine.random.choices", side_effect=_prefer_side):
+            r = engine.judge(state, "응", step.get("last_reply", "…"))
+        st = r["state"]
+        row = (f"판정 {i + 1}: 사건 {st['pending_event']} · 마리 {st['mari_step']} · 태오 {st['taeo_step']} "
+               f"· 첫 아침 {st['morning_done']} · 엔딩 {st['ending']} · 단계 {st['stage']}")
+        if "want_event" in step:
+            row += f" · {'✅' if st['pending_event'] == step['want_event'] else '❌'} 사건 (기대 {step['want_event']})"
+        if step.get("want_morning"):
+            row += f" · {'✅' if st['morning_done'] and not st['pending_event'] else '❌'} 첫 아침 뒤 마무리는 다음 판정"
+        if "want_ending" in step:
+            row += f" · {'✅' if st['ending'] == step['want_ending'] else '❌'} 엔딩 (기대 {step['want_ending']})"
+        out.append(row)
+        if step.get("user") and st["pending_event"]:
+            if pause > 0:
+                time.sleep(pause)
+            t0 = time.time()
+            reply = engine.reply(st, step["user"], history, [])
+            text = to_text(reply)
+            checks = []
+            if reply["dialogue"] == "…" and reply["action"] is None:
+                checks.append("❌ 대체 응답")
+            hit = [k for k in step.get("expect", []) if k in text]
+            checks.append(f"{'✅' if hit else '❌ 원고 대사 없음'} {'/'.join(step.get('expect', []))}")
+            if step.get("silent"):
+                quiet = reply["dialogue"].strip(" .…") == ""
+                checks.append("✅ 서아 대답 안 함" if quiet else f"⚠ 서아가 말함: {reply['dialogue']}")
+            out.append(f"  유저: {step['user']}")
+            out.append(f"  서아: ({reply['action']}) {reply['dialogue']}")
+            out.append(f"  {' · '.join(checks)} · {time.time() - t0:.1f}초")
+            history += [{"r": "u", "t": step["user"]}, {"r": "c", "t": text}]
+            last = text
+        else:
+            last = step.get("last_reply", "…")
+        state = dict(st, pending_event=None)  # 앱처럼 답장 뒤 비움
+        if "want_ending" not in step and i + 1 < len(sc["steps"]) and "last_reply" not in sc["steps"][i + 1]:
+            sc["steps"][i + 1] = dict(sc["steps"][i + 1], last_reply=last)
+    return out
+
+
+def run_rule_scenario(engine, sc) -> list[str]:
+    """서버 규칙만: 판정 모델 대신 중립 판정으로 여러 번 돌려, 나오면 안 되는 조연이 나오는지 센다."""
+    from unittest import mock
+
+    neutral = {"affection_delta": 0, "flags": [], "time_advance": False, "time_of_day": "", "summary": "", "reason": ""}
+    out, bad = [], Counter()
+    with mock.patch.object(engine, "_judge", return_value=neutral):
+        base = {}
+        if sc.get("first"):
+            with mock.patch("engine.random.choices", side_effect=_prefer_side):
+                st = engine.judge(dict(sc["first"], short_streak=2), "응", "…")["state"]
+            ok = st["pending_event"] == sc["first_event"]
+            out.append(f"{'✅' if ok else '❌'} 처음: 사건 {st['pending_event']} (기대 {sc['first_event']}) · 마리 {st['mari_step']} · 태오 {st['taeo_step']}")
+            base = {k: st[k] for k in ("mari_step", "taeo_step")}
+        events = Counter()
+        for s0 in sc["states"]:
+            for _ in range(sc["runs"]):
+                st = engine.judge(dict(s0, **base, short_streak=2, used_events={}), "응", "…")["state"]
+                ev = st["pending_event"] or "없음"
+                events[f"{s0['stage']}단계 {ev}"] += 1
+                if ev.split("_")[0] in sc["never"]:
+                    bad[ev] += 1
+    out.append(f"{'✅ 안 나옴' if not bad else '❌ 나옴 ' + str(dict(bad))} ({' · '.join(f'{k} {v}' for k, v in sorted(events.items()))})")
     return out
 
 

@@ -64,7 +64,13 @@ ROUTE_EVENT_AFFECTION = {2: 40, 3: 55, 4: 65}
 ROUTE_SCENES = {"DATE", "WALK_HOME", "STORM", "ROOFTOP", "ALLEY"}
 SCENE_JUDGES = 2  # 갈래 장면이 시작된 뒤 판정 몇 번(≈ 3턴씩) 동안 장면 블록을 계속 넣을지
 STAGE_UP_SCENES = {2, 3, 4, 6}  # 단계가 오른 다음 답장에 한 번 넣는 상징 장면(STAGE_UP_n). 5는 DEPARTURE
-DEPARTURE_DAYS = 7          # 5단계 출발까지 남은 날
+DEPARTURE_DAYS = 3          # 5단계 출발까지 남은 날 (앱 51: 7일 → 사흘)
+# 남은 날이 줄어든 다음 답장의 action 맨 앞에 한 번 붙이는 지문 (pending_event 로 전달, 앱이 답장 뒤 비움)
+DAY_MARKERS = {
+    "DAYS_LEFT_2": "서아가 떠나기까지, 이틀.",
+    "DAYS_LEFT_1": "서아가 떠나기까지, 하루.",
+    "LAST_NIGHT": "오늘 밤이 지나면, 서아는 떠난다.",
+}
 SUMMARY_TRIGGER = 40        # 요약 안 된 메시지가 이만큼 쌓이면 요약
 KEEP_RECENT = 20            # 요약 후에도 원문으로 남겨 둘 최근 메시지 수
 
@@ -98,6 +104,7 @@ def new_state() -> dict:
         "route": None,            # 갈래 "tease" | "care" | None (앱 51이 정함, 서버는 읽기만)
         "scene": None,            # 진행 중인 갈래 장면(ROUTE_SCENES). 판정이 정하고 앱이 돌려보냄
         "scene_judges_left": 0,   # 그 장면 블록을 넣을 남은 판정 수
+        "last_night_told": False, # 5단계 남은 하루의 밤 지문을 이미 냈는지
         "episode": None,          # 특별 에피소드 id (앱 42: "s2"). 없으면 본 이야기
         "episode_stage": None,    # 에피소드만의 단계 1~6 (앱이 정함)
         "episode_stage_name": "", # 에피소드 단계 이름 (앱 이름)
@@ -144,7 +151,7 @@ def normalize_state(raw: dict | None) -> dict:
     ev = state["pending_event"]
     if isinstance(ev, str):
         ev = ev.removeprefix("EVENT_")
-        known = ({e for v in STAGE_EVENTS.values() for e in v} | {"DEPARTURE"} | ROUTE_SCENES
+        known = ({e for v in STAGE_EVENTS.values() for e in v} | {"DEPARTURE"} | ROUTE_SCENES | set(DAY_MARKERS)
                  | {f"STAGE_UP_{n}" for n in STAGE_UP_SCENES})
         state["pending_event"] = ev if ev in known else None
     else:
@@ -244,6 +251,8 @@ class Engine:
             data = self._parse_json(raw)
             if data and str(data.get("dialogue") or "").strip():
                 out = self._validate_reply(data, ids, allowed_locations(state))
+                if event in DAY_MARKERS:  # 남은 날 지문은 모델에 맡기지 않고 그대로 앞에 붙임
+                    out["action"] = f"{DAY_MARKERS[event]} {out['action'] or ''}".strip()
                 if not out["location"] and event in EVENT_LOCATIONS:  # 장소를 옮기는 사건인데 모델이 빠뜨리면 서버가 채움
                     out["location"] = EVENT_LOCATIONS[event]
                 if pose_id:  # 포즈 부탁: 앱이 그 몸짓을 고정 재생하므로 답장도 같은 몸짓으로
@@ -533,6 +542,17 @@ class Engine:
             if state["stage"] == 5 and state["departure_days_left"] is not None:
                 state["departure_days_left"] = max(0, state["departure_days_left"] - 1)
                 changes.append(f"출발까지 {state['departure_days_left']}일")
+                marker = {2: "DAYS_LEFT_2", 1: "DAYS_LEFT_1"}.get(state["departure_days_left"])
+                if marker and not state["episode"]:
+                    state["pending_event"] = marker  # 다음 답장 지문 맨 앞에 한 번
+
+        if (  # 남은 하루의 밤이 되면 한 번: 「오늘 밤이 지나면, 서아는 떠난다.」
+            not state["episode"] and state["stage"] == 5 and state["departure_days_left"] == 1
+            and not state["last_night_told"] and not state["pending_event"]
+            and "밤" in state["time_of_day"]
+        ):
+            state["pending_event"] = "LAST_NIGHT"
+            state["last_night_told"] = True
 
         if state["episode"]:  # 에피소드: 호감·플래그·시간대만. 비밀·단계 상승·출발·엔딩은 본 이야기 몫
             return changes

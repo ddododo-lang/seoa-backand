@@ -232,6 +232,83 @@ SCENARIOS["stageup4"] = {  # 3→4: /judge 가 pending_event = STAGE_UP_4 로 �
     "check": "name",
 }
 SECOND_FLOOR = "바 '라스트 오더' 2층"
+# ---------- 갈래·실패 엔딩·순간 선물·대화량 (feat/story-routes) ----------
+DEPART_LINE = "*서아가 시선을 창밖에 둔 채 잔을 내려놓는다.* 의뢰 하나 받았어. 출발은 사흘 뒤."
+LONG = ["오늘은 일부러 일찍 문 열었어. 네가 비 맞고 올까 봐 수건도 데워 놨고, 늘 마시던 거 미리 준비해 뒀어.",
+        "그 상처 아직 아프지? 무리하지 말고 오늘은 그냥 여기서 쉬어. 내가 옆에서 아무 말 안 하고 있을게.",
+        "솔직히 말하면 네가 안 오는 날은 하루 종일 이 자리만 계속 보게 돼. 그러니까 다치지 말고, 매일 와 줘."]
+ROUTE_SCENARIOS = {
+    "route_date": {  # 2단계 장난 갈래: 판정이 DATE 를 시작한 다음 턴
+        "state": {"stage": 2, "affection": 41, "day": 4, "route": "tease", "pending_event": "DATE", "scene": "DATE",
+                  "scene_judges_left": 2, "stage_user_msgs": 10},
+        "history": BASE_HISTORY, "turns": ["오늘은 좀 늦게까지 있네?", "…애인? 진심이야?"],
+        "expect_any": ["애인"],
+    },
+    "route_walk": {  # 2단계 다정 갈래: WALK_HOME
+        "state": {"stage": 2, "affection": 41, "day": 4, "route": "care", "pending_event": "WALK_HOME", "scene": "WALK_HOME",
+                  "scene_judges_left": 2, "stage_user_msgs": 10},
+        "history": BASE_HISTORY, "turns": ["벌써 가? 다리 아직 불편해 보이는데.", "(우산을 챙겨 따라나선다) 데려다줄게."],
+        "expect_any": ["따라오지 마"],
+    },
+    "route_alley": {  # 4단계 그 골목: 비밀1 (판정이 ALLEY 를 시작하며 비밀1 을 공개로 넣음)
+        "state": {"stage": 4, "affection": 66, "day": 9, "route": "care", "pending_event": "ALLEY", "scene": "ALLEY",
+                  "scene_judges_left": 2, "revealed_secrets": ["비밀1"], "summary": "유저 이름: 도윤. 서아는 매일 바에 온다."},
+        "history": BASE_HISTORY, "turns": ["어디 가는 거야? 이 골목은 왜…", "(가만히 손을 맡긴다)"],
+        "expect_any": ["쓰러져", "이 손", "손은 기억"], "location": "비 내리는 골목",
+    },
+    "pursue_tease": {  # 5단계 붙잡기 장소(장난 갈래)
+        "state": {"stage": 5, "affection": 80, "day": 12, "route": "tease", "departure_days_left": 2},
+        "history": [{"r": "c", "t": DEPART_LINE}], "turns": ["(서아를 찾아 밖으로 나선다) 어디 있어."],
+        "location": "네온 골목",
+    },
+    "pursue_care": {  # 5단계 붙잡기 장소(다정 갈래)
+        "state": {"stage": 5, "affection": 80, "day": 12, "route": "care", "departure_days_left": 2},
+        "history": [{"r": "c", "t": DEPART_LINE}], "turns": ["(서아를 찾아 밖으로 나선다) 어디 있어."],
+        "location": "바 옥상",
+    },
+    "rewind": {  # 되감기 뒤 첫 턴: 데자뷔를 말하면 ❌
+        "state": {"stage": 5, "affection": 76, "day": 10, "route": "care", "departure_days_left": 3},
+        "history": [{"r": "c", "t": DEPART_LINE}, {"r": "c", "t": "*…다시, 그 밤.*"}],
+        "turns": ["가지 마. 이번엔 그냥 못 보내."], "check": "deja",
+    },
+    "moment_hurt": {  # 다쳐서 온 밤 + 구급상자 목록 → gift_moment 나옴
+        "state": {"stage": 1, "affection": 4, "day": 1, "gift_moments": [
+            {"id": "firstaid", "name": "구급상자", "when": "서아가 다쳐서 왔을 때"}]},
+        "history": [{"r": "c", "t": "*손등의 피를 소매로 닦는다.* 별거 아니야."}],
+        "turns": ["피 나잖아. 손 좀 보자."], "moment": "firstaid",
+    },
+    "moment_plain": {  # 평범한 대화 + 칵테일 목록 → 안 나옴, 자주 나오면 ❌
+        "state": {"stage": 2, "affection": 22, "day": 4, "gift_moments": [
+            {"id": "cocktail", "name": "칵테일", "when": "서아가 지쳐 보이거나 자기 술 얘기를 할 때"}]},
+        "history": BASE_HISTORY,
+        "turns": ["오늘 비 진짜 많이 오더라.", "창가 자리 좋아하지?", "요즘 이 동네 시끄럽더라.", "음악 바꿔 볼까?"],
+        "moment": None,
+    },
+    "xmas_late": {  # 크리스마스 남은 8 · 단계 3 → 떠날 기색
+        "state": {"stage": 3, "affection": 45, "day": 6, "episode": "s2", "episode_stage": 3, "episode_stage_name": "썸",
+                  "location": "크리스마스 거리", "episode_turns_left": 8},
+        "history": [{"r": "c", "t": "*서아가 니트 소매를 끌어당긴다.* …오늘은 빼 달라고 했어."}],
+        "turns": ["불빛 예쁘다. 조금만 더 걷자."], "expect_any": ["밤 꽤 깊었네"],
+    },
+}
+# 판정 흐름 시나리오: steps 는 판정 한 번에 들어가는 유저 메시지 묶음(줄바꿈 = 메시지)
+JUDGE_SCENARIOS = {
+    "bonus_short": {"state": {"stage": 2, "affection": 20}, "steps": ["응\n뭐해?\nㅋㅋ"], "want": "bonus0"},
+    "bonus_long": {"state": {"stage": 2, "affection": 20}, "steps": ["\n".join(LONG)], "want": "bonus2"},
+    "bonus_repeat": {"state": {"stage": 2, "affection": 20}, "steps": ["\n".join([LONG[0]] * 3)], "want": "bonus0"},
+    "min_msgs": {  # 2단계: 호감 40·outside 가 차도 메시지 14개면 안 오르고, 15개째에 오름
+        "state": {"stage": 2, "affection": 45, "stage_flags": ["outside"], "stage_user_msgs": 13},
+        "steps": ["오늘 같이 걸어서 좋았어.", "다음에도 같이 나가자."], "want": "up_on_second",
+    },
+    "day_marker": {  # 5단계 하루 넘김 → 남은 날 지문
+        "state": {"stage": 5, "affection": 80, "day": 10, "route": "care", "departure_days_left": 3},
+        "steps": ["(밤이 지나고 다음 날 아침, 바 문을 연다)"], "want": "marker",
+    },
+    "departed": {  # 사흘 뒤 pursue 없음 → ending departed
+        "state": {"stage": 5, "affection": 80, "day": 12, "route": "care", "departure_days_left": 1},
+        "steps": ["(밤이 지나고 다음 날 아침이 됐다. 창가 자리는 비어 있다)"], "want": "departed",
+    },
+}
 CHECK_SYSTEM = "너는 롤플레이 대사 검사기다. 질문에 JSON 하나로만 답한다."
 CHECK_PROMPTS = {  # 모델에게 묻는 확인 (문자열만으로는 못 가리는 것)
     "approach": ('유저 행동: {user}\n서아 응답: {text}\n\n서아가 유저가 다가오기 전에 먼저 유저에게 다가가거나 '
@@ -239,6 +316,8 @@ CHECK_PROMPTS = {  # 모델에게 묻는 확인 (문자열만으로는 못 가�
                  '{{"yes": true 또는 false, "why": "한 문장"}}'),
     "avoid": ('유저 행동: {user}\n서아 응답: {text}\n\n유저가 다가왔을 때 서아가 물러나거나 자리를 피하거나 유저를 밀어냈나? '
               '(말로 받아치는 것은 피한 게 아니다) {{"yes": true 또는 false, "why": "한 문장"}}'),
+    "deja": ('서아 응답: {text}\n\n서아가 같은 일이 반복된다, 전에 겪은 것 같다, 기억이 난다, 꿈 같다처럼 '
+             '데자뷔나 시간이 되돌아간 걸 아는 듯한 말을 했나? {{"yes": true 또는 false, "why": "한 문장"}}'),
     "invented": ('서아 응답: {text}\n\n서아가 유저를 사람 이름(예: 민준, 지우)으로 불렀나? '
                  '"사장님", "너", "당신"은 이름이 아니다. {{"yes": true 또는 false, "name": "부른 이름 또는 빈 문자열"}}'),
 }
@@ -259,6 +338,8 @@ def model_check(llm, kind: str, user: str, text: str) -> dict | None:
         return None
 
 
+SCENARIOS.update(ROUTE_SCENARIOS)
+SCENARIOS.update({k: dict(v, kind="judge") for k, v in JUDGE_SCENARIOS.items()})
 for _scene, (_gift, _state, _history) in GIFT_SCENES.items():  # 장면 셋 × 기분 맞음/안 맞음
     for _fit in (False, True):
         SCENARIOS[f"gift_{_scene}{'_fit' if _fit else ''}"] = {
@@ -279,11 +360,17 @@ def run_scenarios(which: str, pause: float = 0) -> None:
     for name in names:
         sc = SCENARIOS[name]
         state = dict(sc["state"])
-        history = list(sc["history"])
+        history = list(sc.get("history", []))
         stage = state.get("episode_stage") or state["stage"]
         unlocked = [m for k in range(1, state["stage"] + 1) for m in STAGE_UNLOCK[k]]
         motion_list = [{"id": m, "name": MOTIONS[m][0], "emo": MOTIONS[m][1]} for m in unlocked]
         lines += [f"## {name}", ""]
+        if sc.get("kind") == "judge":
+            out = run_judge_scenario(engine, sc)
+            print(f"[{name}] " + "\n        ".join(out) + "\n")
+            lines += [f"- {x}" for x in out] + [""]
+            continue
+        moments_seen = 0
         for user in sc["turns"]:
             if not first and pause > 0:
                 time.sleep(pause)
@@ -335,6 +422,23 @@ def run_scenarios(which: str, pause: float = 0) -> None:
                 if sc.get("gift_fit"):  # 기분 맞는 선물은 care 크게
                     big = "care" in judged["flags"] and delta >= 6
                     checks.append(f"{'✅' if big else '❌'} 기분 맞는 선물 → care 크게")
+            if "expect_any" in sc:
+                hit = any(k in text for k in sc["expect_any"])
+                checks.append(f"{'✅' if hit else '⚠ 원고 대사 없음'} {'/'.join(sc['expect_any'])}")
+            if "location" in sc and user == sc["turns"][0]:
+                ok = reply["location"] == sc["location"]
+                checks.append(f"장소 {'✅' if ok else '❌'} {reply['location']} (기대 {sc['location']})")
+            if sc.get("check") == "deja":
+                r = model_check(llm, "deja", user, text)
+                checks.append("⚠ 데자뷔 확인 실패" if r is None else (f"❌ 데자뷔({r.get('why', '')})" if r["yes"] else "✅ 데자뷔 없음"))
+            if "moment" in sc:
+                gm = reply.get("gift_moment")
+                moments_seen += bool(gm)
+                if sc["moment"]:
+                    checks.append(f"{'✅' if gm and gm['id'] == sc['moment'] else '❌'} 순간 선물 {gm}")
+                else:
+                    checks.append(f"{'❌ ' if gm and moments_seen >= 2 else ''}순간 선물 {gm} (누적 {moments_seen})")
+            state = dict(state, pending_event=None)  # 앱처럼 답장 뒤 비움
             history += [{"r": "u", "t": user}, {"r": "c", "t": text}]
             print(f"[{name}] 유저: {user}\n        서아: ({reply['action']}) {dialogue}\n        "
                   f"{' · '.join(checks)} · {sec:.1f}초\n")
@@ -345,6 +449,38 @@ def run_scenarios(which: str, pause: float = 0) -> None:
         lines.append("")
     (BASE_DIR / "eval_scenarios.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("전문: eval_scenarios.md")
+
+
+def run_judge_scenario(engine, sc) -> list[str]:
+    """판정 흐름: 묶음마다 /judge, 결과를 기대와 비교."""
+    state, out = dict(sc["state"]), []
+    for i, batch in enumerate(sc["steps"]):
+        r = engine.judge(state, batch, "…")
+        st, pg = r["state"], r["progress"] or {}
+        out.append(f"판정 {i + 1}: 메시지 {len(batch.splitlines())}개 · 플래그 {r['flags']} · 보너스 +{pg.get('talk_bonus')} "
+                   f"· 단계 {st['stage']} (상승 {r['stage_up']}) · 남은 날 {st['departure_days_left']} · 사건 {r['pending_event']} "
+                   f"· 엔딩 {st['ending']} · 최소 메시지 남음 {pg.get('min_msgs_left')}")
+        want = sc["want"]
+        if want.startswith("bonus"):
+            n = int(want[-1])
+            good = pg.get("talk_bonus") == n or (n == 2 and pg.get("talk_bonus") == 1 and not set(r["flags"]) & {"care", "sincere", "comfort", "tease"})
+            out.append(f"{'✅' if good else '❌'} 보너스 +{pg.get('talk_bonus')} (기대 +{n}{', 판정 플래그가 없으면 +1' if n == 2 else ''})")
+        elif want == "up_on_second":
+            if i == 0:
+                out.append(f"{'❌ 14개인데 오름' if r['stage_up'] else '✅ 14개면 안 오름'}")
+            else:
+                out.append(f"{'✅ 15개째 오름' if r['stage_up'] else '❌ 15개인데 안 오름'}"
+                           f"{'' if st['affection'] >= 40 else ' (호감이 40 아래로 떨어짐: 판정 탓)'}")
+        elif want == "marker":
+            if r["pending_event"] and r["pending_event"].startswith("DAYS_LEFT"):
+                reply = engine.reply(st, "…왔네.", [{"r": "c", "t": DEPART_LINE}], [])
+                out.append(f"✅ 남은 날 지문: {reply['action']}")
+            else:
+                out.append(f"❌ 하루가 안 넘어감(판정 time_advance {r['judge'].get('time_advance')})")
+        elif want == "departed":
+            out.append(f"{'✅' if st['ending'] == 'departed' else '❌'} 엔딩 {st['ending']}")
+        state = dict(st, pending_event=None)
+    return out
 
 
 def starts(text: str) -> str:

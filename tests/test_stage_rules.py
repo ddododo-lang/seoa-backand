@@ -8,9 +8,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from engine import Engine, new_state  # noqa: E402
 
 
-def state(stage=1, affection=0, flags=()):
+def state(stage=1, affection=0, flags=(), msgs=99):
     s = new_state()
-    s.update(stage=stage, affection=affection, stage_flags=list(flags))
+    s.update(stage=stage, affection=affection, stage_flags=list(flags), stage_user_msgs=msgs)
     return s
 
 
@@ -28,6 +28,11 @@ class Stage1To2Test(unittest.TestCase):
 
     def test_flag_still_required(self):
         self.assertIsNone(Engine._next_stage(state(affection=25, flags=["tease"])))
+
+    def test_min_messages_gate(self):  # 앱 51: 2→3 은 그 단계에서 유저 메시지 15개 이상
+        self.assertIsNone(Engine._next_stage(state(stage=2, affection=40, flags=["outside"], msgs=14)))
+        self.assertEqual(Engine._next_stage(state(stage=2, affection=40, flags=["outside"], msgs=15)), 3)
+        self.assertEqual(Engine._next_stage(state(stage=1, affection=10, flags=["care"], msgs=0)), 2)  # 1→2 는 없음
 
     def test_stage2_rule_unchanged(self):
         self.assertIsNone(Engine._next_stage(state(stage=2, affection=39, flags=["outside"])))

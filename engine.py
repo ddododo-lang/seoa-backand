@@ -37,7 +37,7 @@ LOCATIONS = ["바 '라스트 오더' 1층", "바 '라스트 오더' 2층", "네�
 EMOTIONS = {"평온", "기쁨", "도발", "장난", "진심", "설렘", "수줍음", "놀람", "슬픔", "분노", "질투", "당황"}
 POSE_REQUEST = re.compile(r"^\s*(.+?)\s*해\s*줄래\s*\??\s*$")  # 앱 48 포즈 부탁 문장
 HISTORY_MESSAGES = 32       # 대화 호출에 넣을 최근 기록 (16턴 = 유저 16 + 서아 16)
-FALLBACK = {"action": None, "dialogue": "…", "motion_id": None, "emotion": "평온", "location": None}
+FALLBACK = {"action": None, "dialogue": "…", "motion_id": None, "emotion": "평온", "location": None, "gift_moment": None}
 REPLY_SCHEMA = {  # Gemini 응답 스키마 (OUTPUT_FORMAT과 같은 모양)
     "type": "OBJECT",
     "properties": {
@@ -46,6 +46,10 @@ REPLY_SCHEMA = {  # Gemini 응답 스키마 (OUTPUT_FORMAT과 같은 모양)
         "motion_id": {"type": "STRING", "nullable": True},
         "emotion": {"type": "STRING"},
         "location": {"type": "STRING", "nullable": True},
+        "gift_moment": {  # 앱 50: 순간 선물을 여는 신호. 보통 null
+            "type": "OBJECT", "nullable": True,
+            "properties": {"id": {"type": "STRING"}, "reason": {"type": "STRING"}},
+        },
     },
     "required": ["action", "dialogue", "motion_id", "emotion", "location"],
 }
@@ -64,6 +68,8 @@ ROUTE_EVENT_AFFECTION = {2: 40, 3: 55, 4: 65}
 ROUTE_SCENES = {"DATE", "WALK_HOME", "STORM", "ROOFTOP", "ALLEY"}
 SCENE_JUDGES = 2  # 갈래 장면이 시작된 뒤 판정 몇 번(≈ 3턴씩) 동안 장면 블록을 계속 넣을지
 STAGE_UP_SCENES = {2, 3, 4, 6}  # 단계가 오른 다음 답장에 한 번 넣는 상징 장면(STAGE_UP_n). 5는 DEPARTURE
+GIFT_MOMENT_GAP = 10       # 같은 순간 선물은 준 뒤 유저 메시지 이만큼 지나야 다시 엶
+GIFT_MOMENT_QUIET = 3      # 순간 선물을 준 뒤 이만큼은 어떤 순간 선물도 열지 않음(자주 넣지 않기)
 DEPARTURE_DAYS = 3          # 5단계 출발까지 남은 날 (앱 51: 7일 → 사흘)
 # 남은 날이 줄어든 다음 답장의 action 맨 앞에 한 번 붙이는 지문 (pending_event 로 전달, 앱이 답장 뒤 비움)
 DAY_MARKERS = {
@@ -105,6 +111,7 @@ def new_state() -> dict:
         "scene": None,            # 진행 중인 갈래 장면(ROUTE_SCENES). 판정이 정하고 앱이 돌려보냄
         "scene_judges_left": 0,   # 그 장면 블록을 넣을 남은 판정 수
         "last_night_told": False, # 5단계 남은 하루의 밤 지문을 이미 냈는지
+        "gift_moments": [],       # 앱 50: 지금 열 수 있는 순간 선물 [{id, name, when}] (앱이 이미 거름)
         "episode": None,          # 특별 에피소드 id (앱 42: "s2"). 없으면 본 이야기
         "episode_stage": None,    # 에피소드만의 단계 1~6 (앱이 정함)
         "episode_stage_name": "", # 에피소드 단계 이름 (앱 이름)
@@ -131,6 +138,11 @@ def normalize_state(raw: dict | None) -> dict:
             state[key] = value
     state["stage"] = max(1, min(6, state["stage"]))
     state["affection"] = max(0, min(100, state["affection"]))
+    state["gift_moments"] = [
+        {k: str(g.get(k) or "").strip()[:60] for k in ("id", "name", "when")}
+        for g in (state["gift_moments"] if isinstance(state["gift_moments"], list) else [])
+        if isinstance(g, dict) and str(g.get("id") or "").strip()
+    ][:6]
     if state["route"] not in ROUTES:
         state["route"] = None
     if state["scene"] not in ROUTE_SCENES:
@@ -223,6 +235,7 @@ class Engine:
         history: [{"r": "u"|"c", "t": "..."}] 최근 기록. motion_list: [{"id", "name", "emo"}].
         """
         state = normalize_state(state)
+        state["gift_moments"] = self._open_moments(state["gift_moments"], history, user_message)
         event = state["pending_event"]
         system = self._build_system(state, event, motion_list)
         opening = self.blocks["OPENING"].strip()
@@ -251,6 +264,7 @@ class Engine:
             data = self._parse_json(raw)
             if data and str(data.get("dialogue") or "").strip():
                 out = self._validate_reply(data, ids, allowed_locations(state))
+                out["gift_moment"] = self._gift_moment(data.get("gift_moment"), state["gift_moments"])
                 if event in DAY_MARKERS:  # 남은 날 지문은 모델에 맡기지 않고 그대로 앞에 붙임
                     out["action"] = f"{DAY_MARKERS[event]} {out['action'] or ''}".strip()
                 if not out["location"] and event in EVENT_LOCATIONS:  # 장소를 옮기는 사건인데 모델이 빠뜨리면 서버가 채움
@@ -270,6 +284,33 @@ class Engine:
             else:
                 merged.append(dict(m))
         return merged
+
+    @staticmethod
+    def _open_moments(moments: list[dict], history: list[dict], user_message: str = "") -> list[dict]:
+        """앱이 보낸 순간 선물 목록에서, 최근에 준 것을 뺀다(대화 기록 + 이번 메시지의 「[유저가 선물함: 이름] · 순간 선물」 줄로 셈)."""
+        if not moments:
+            return moments
+        users = [str(h.get("t") or "") for h in history if h.get("r") == "u"] + [user_message or ""]
+        given = [i for i, t in enumerate(users) if "· 순간 선물" in t or "순간 선물]" in t]
+        if given and len(users) - 1 - given[-1] < GIFT_MOMENT_QUIET:
+            return []  # 방금 순간 선물을 줬으면 잠깐 쉼
+        def recent(name: str) -> bool:
+            for i in reversed(given):
+                if f"[유저가 선물함: {name}" in users[i]:
+                    return len(users) - 1 - i < GIFT_MOMENT_GAP
+            return False
+        return [g for g in moments if not recent(g["name"])]
+
+    @staticmethod
+    def _gift_moment(raw, moments: list[dict]) -> dict | None:
+        """모델이 고른 순간 선물. 이번 목록 안의 id 만, reason 은 짧게."""
+        if not isinstance(raw, dict) or not moments:
+            return None
+        gid = str(raw.get("id") or "").strip()
+        if gid not in {g["id"] for g in moments}:
+            return None
+        reason = str(raw.get("reason") or "").strip().strip("\"'")[:20]
+        return {"id": gid, "reason": reason or next(g["name"] for g in moments if g["id"] == gid)}
 
     @staticmethod
     def _pose_request(user_message: str, motion_list: list[dict]) -> str | None:
@@ -387,6 +428,9 @@ class Engine:
                 self.blocks["OUTPUT_FORMAT"],
             ]
             return "\n\n".join(parts)
+        if state["gift_moments"]:  # 앱 50: 열 수 있는 순간 선물이 있을 때만
+            values["gift_moments"] = "\n".join(f"- {g['id']} {g['name']}: {g['when']}" for g in state["gift_moments"])
+            parts.append(render(self.blocks["GIFT_MOMENT"], values))
         if state["day"] == 1:  # 앱 37 골목 프롤로그: 첫날 밤에만
             parts.append(self.blocks["FIRST_NIGHT"])
         parts += [

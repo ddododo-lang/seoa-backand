@@ -305,6 +305,10 @@ class Engine:
         parts = [
             self.blocks["BASE_SYSTEM"],
             render(self.blocks["STATE_BLOCK"], values),
+        ]
+        if state["day"] == 1:  # 앱 37 골목 프롤로그: 첫날 밤에만
+            parts.append(self.blocks["FIRST_NIGHT"])
+        parts += [
             render(self.blocks[f"STAGE_{state['stage']}"], values),
             render(self.blocks["MOTION_BLOCK"], values),
             self.blocks["OUTPUT_FORMAT"],

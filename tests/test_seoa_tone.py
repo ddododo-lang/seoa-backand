@@ -113,7 +113,7 @@ class StageUpSceneTest(unittest.TestCase):  # 3
 class UserNameTest(unittest.TestCase):  # 4
     def test_rules(self):
         e = engine()
-        self.assertIn("유저의 이름은 지어내지 않는다", e.blocks["BASE_SYSTEM"])
+        self.assertIn("없음이면 지어내지 않고", e.blocks["BASE_SYSTEM"])  # S2: 이름 줄을 바꿈
         self.assertNotIn("처음으로 유저의 이름을 부른다 (진지한 순간에만)", e.blocks["STAGE_4"])
         self.assertIn("모르면 이름을 지어내지 않고, 이름을 묻는 쪽으로 간다", e.blocks["STAGE_4"])
         self.assertIn("「유저 이름: ○○」을 꼭 남긴다", e.blocks["JUDGE_SYSTEM"])

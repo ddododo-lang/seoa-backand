@@ -27,7 +27,23 @@ STAGE_EVENTS = {  # 무작위 사건. 마리·태오는 차례·단계 범위(SI
     5: [],
     6: ["STORM", "DATE", "ROOFTOP", "BLACKOUT", "INJURY"],  # 연인 일상. 마리·태오 마무리는 첫 아침 뒤 따로 한 번
 }
-ALLOWED_FLAGS = {"care", "protect", "outside", "sincere", "pursue", "tease", "comfort", "reveal_secret1"}
+ALLOWED_FLAGS = {"care", "protect", "outside", "sincere", "pursue", "tease", "comfort", "reveal_secret1",
+                 "refuse_name", "apologize"}
+# S2 유저 이름: 3단계에 오르며 이름으로 부르고 싶다고 묻고, 거절하면 관계가 흔들린다 (본편만)
+NAME_STATES = ("none", "asked", "accepted", "refused", "forgiven", "closed")
+NAME_FLAGS = {"refuse_name", "apologize"}  # 판정 flags 로만 쓰고 stage_flags 에는 넣지 않음
+NAME_EVENTS = {"NAME_REFUSED", "NAME_FORGIVEN", "NAME_REFUSED_AGAIN"}
+NAME_REFUSE_PENALTY = 10        # 첫 거절: 호감 -10, 2단계로
+NAME_REFUSE_AGAIN_PENALTY = 25  # 사과받은 뒤 또 거절: 호감 -25, 다시는 이름 안 부름
+NAME_FORGIVE_MIN_AFFECTION = 40  # 사과로 3단계에 돌아갈 때 호감 최소
+NAME_MAX_LEN = 8
+NAME_STRIP = re.compile(r'[\r\n{}"「」]')
+NAME_CALL = {  # STATE_BLOCK 「이름 부르기」
+    "none": "아직 안 부름", "asked": "아직 안 부름",
+    "accepted": "진지한 순간에 이름", "forgiven": "진지한 순간에 이름",
+    "refused": "거절당함, 사과를 기다림. 이름 부르지 않음",
+    "closed": "다시는 이름 부르지 않음",
+}
 ROUTES = ("tease", "care")  # 앱 51 갈래
 # 크리스마스(s2) 자정 기색: 자정까지 남은 유저 메시지 수 → 그 턴에 한 번 (에피소드 단계 4 미만일 때만, 점점 분명하게)
 # 남은 수가 그 구간에 들어오면, 그 구간의 줄을 최근 기록에서 아직 안 했을 때 한 번 (10·5·2 즈음, 점점 분명하게)
@@ -150,7 +166,32 @@ def new_state() -> dict:
         "episode_turns_left": None,  # 크리스마스: 자정까지 남은 유저 메시지 수 (앱이 셈)
         "mari_step": 0,           # 앱 54 조연 차례: 0 아직 · 1 처음 · 2 두 번째 · 3 마무리(또는 닫힘)
         "taeo_step": 0,
+        "user_name": "",          # S2: 앱 시작 화면의 닉네임(1~8자). 서버는 저장하지 않음
+        "name_state": "none",     # NAME_STATES
+        "judge_soon": False,      # name_state 가 asked·refused 면 true: 앱이 다음 답마다 바로 판정
     }
+
+
+def clean_user_name(raw) -> str:
+    """앞뒤 공백을 자르고 줄바꿈·{ } " 「 」를 빼고 8자까지."""
+    if not isinstance(raw, str):
+        return ""
+    return NAME_STRIP.sub("", raw).strip()[:NAME_MAX_LEN].strip()
+
+
+def name_josa(name: str) -> str:
+    """끝 글자가 받침 있는 한글이면 「이라고」, 아니면 「라고」. 도윤이라고 · 민지라고 · Alex라고."""
+    last = (name or "")[-1:]
+    if last and 0xAC00 <= ord(last) <= 0xD7A3 and (ord(last) - 0xAC00) % 28:
+        return "이라고"
+    return "라고"
+
+
+def name_call(state: dict) -> str:
+    """「이름 부르기」 문장. 유저 이름이 없는 예전 앱은 4단계부터 대화에서 알게 된 이름을 (예전처럼)."""
+    if not state.get("user_name"):
+        return NAME_CALL["accepted"] if state.get("stage", 1) >= 4 else NAME_CALL["none"]
+    return NAME_CALL.get(state.get("name_state") or "none", NAME_CALL["none"])
 
 
 def normalize_state(raw: dict | None) -> dict:
@@ -216,12 +257,16 @@ def normalize_state(raw: dict | None) -> dict:
     if isinstance(ev, str):
         ev = ev.removeprefix("EVENT_")
         known = ({e for v in STAGE_EVENTS.values() for e in v} | {"DEPARTURE"} | ROUTE_SCENES | set(DAY_MARKERS) | SIDE_EVENTS | set(SIDE_CHARS)
-                 | {f"STAGE_UP_{n}" for n in STAGE_UP_SCENES})
+                 | {f"STAGE_UP_{n}" for n in STAGE_UP_SCENES} | NAME_EVENTS)
         state["pending_event"] = ev if ev in known else None
     else:
         state["pending_event"] = None
+    state["user_name"] = clean_user_name(state["user_name"])
+    if state["name_state"] not in NAME_STATES:
+        state["name_state"] = "none"
+    state["judge_soon"] = state["name_state"] in ("asked", "refused")
     state["recent_lines"] = [str(x) for x in state["recent_lines"]][-3:]
-    state["stage_flags"] = [f for f in state["stage_flags"] if f in ALLOWED_FLAGS]
+    state["stage_flags"] = [f for f in state["stage_flags"] if f in ALLOWED_FLAGS - NAME_FLAGS]
     if not isinstance(state["used_events"], dict):
         state["used_events"] = {}
     return state
@@ -457,6 +502,7 @@ class Engine:
         nxt_event = None if state["episode"] else self._tick_events(state, last_user)
         if nxt_event:
             changes.append(f"다음 턴 사건: {nxt_event}")
+        state["judge_soon"] = state["name_state"] in ("asked", "refused")
         return {
             "state": state,
             "stage_up": state["stage"] > stage_before,
@@ -481,6 +527,9 @@ class Engine:
             "departure_days_left": "-" if days is None else days,
             "summary": state["summary"] or "아직 없음 (이야기의 시작)",
             "recent_lines": "\n".join(f"- {x}" for x in state.get("recent_lines", [])[-3:]) or "- 없음",
+            "user_name": state.get("user_name") or "없음",
+            "name_josa": name_josa(state.get("user_name") or ""),
+            "name_call": name_call(state),
         }
         if state.get("episode"):  # 에피소드: 본 이야기 단계·호감·요약·비밀 대신 이 밤의 값
             name = state["episode_stage_name"] or STAGE_NAMES[state["episode_stage"]]
@@ -535,14 +584,26 @@ class Engine:
         if event in ("MARI", "TAEO"):  # 예전 값: 차례로 고름
             event = f"{event}_{max(1, min(3, state[event.lower() + '_step']))}"
         if event and f"EVENT_{event}" in self.blocks:  # 이번 답장의 사건(시작 턴)
-            parts.append(self.blocks[f"EVENT_{event}"])
+            parts.append(render(self.blocks[f"EVENT_{event}"], values))  # NAME_FORGIVEN 은 {{user_name}}
         elif event and event.startswith("STAGE_UP_") and event in self.blocks:
-            parts.append(self.blocks[event])  # 단계 오른 직후 한 번: 앱이 답장 뒤 pending_event 를 비움
+            block = self._stage_up_block(state, event)
+            if block:  # 단계 오른 직후 한 번: 앱이 답장 뒤 pending_event 를 비움
+                parts.append(render(self.blocks[block], values))
         elif state["scene"]:  # 다른 사건이 없으면 진행 중인 갈래 장면을 이어 감
             parts.append(self.blocks[f"EVENT_{state['scene']}"])
         if "ALLEY" in (event, None if event else state["scene"]) and state["route"] == "care":
             parts.append(self.blocks["EVENT_ALLEY_CARE"])
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _stage_up_block(state: dict, event: str) -> str | None:
+        """S2: 이름을 물을 차례면 STAGE_UP_3_NAMED. 「…너 이름, 아직 안 물어봤네.」(STAGE_UP_4)는 유저 이름이 없고 name_state none 일 때만."""
+        named = bool(state.get("user_name"))
+        if event == "STAGE_UP_3" and named and state.get("name_state") == "asked":
+            return "STAGE_UP_3_NAMED"
+        if event == "STAGE_UP_4" and (named or state.get("name_state") != "none"):
+            return None
+        return event
 
     @staticmethod
     def _to_llm_messages(history: list[dict]) -> list[dict]:
@@ -698,12 +759,21 @@ class Engine:
         state[key] = 3 if route and SIDE_OF_ROUTE[route] != name else max(state[key], int(n))
 
     # ---------- 판정 ----------
+    @staticmethod
+    def _judge_name_call(state: dict) -> str:
+        line = name_call(state)
+        if state.get("user_name") and state.get("name_state") == "asked":
+            line += " (서아가 이름으로 부르고 싶다고 물어본 참)"
+        return line
+
     def _judge(self, state: dict, user_message: str, reply: str,
                need_summary: bool = False, recent: list[dict] | None = None) -> dict:
         prompt = (
             f"[현재 상태]\n단계: {state['stage']} ({state['episode_stage_name'] or STAGE_NAMES[state['stage']]}), "
             f"호감도: {state['affection']}, {state['day']}일째 {state['time_of_day']}, "
-            f"장소: {state['location']}\n\n[지금까지의 요약]\n{state['summary'] or '없음'}"
+            f"장소: {state['location']}"
+            + ("" if state["episode"] else f", 이름 부르기: {self._judge_name_call(state)}")
+            + f"\n\n[지금까지의 요약]\n{state['summary'] or '없음'}"
         )
         if need_summary:
             convo = "\n".join(
@@ -748,7 +818,7 @@ class Engine:
             changes.append(f"호감도 {before} → {state['affection']}")
 
         for flag in judge["flags"]:
-            if flag not in state["stage_flags"]:
+            if flag not in state["stage_flags"] and flag not in NAME_FLAGS:
                 state["stage_flags"].append(flag)
 
         if judge["time_of_day"]:
@@ -783,6 +853,8 @@ class Engine:
             state["revealed_secrets"].append("비밀1")
             changes.append("비밀1 공개")
 
+        self._apply_name(state, judge, changes)
+
         nxt = self._next_stage(state)
         if nxt:
             self._advance(state, nxt, changes)
@@ -794,12 +866,64 @@ class Engine:
         return changes
 
     @staticmethod
+    def _set_stage(state: dict, stage: int) -> None:
+        """이름 흐름으로 단계를 옮김(올리기·내리기). 단계 상징 장면은 넣지 않고, 이 단계의 셈은 0부터."""
+        state["stage"] = stage
+        state["stage_flags"] = []
+        state["stage_bonus"], state["stage_user_msgs"] = 0, 0
+        if state["scene"]:  # 3단계 갈래 장면이 2단계로 따라오지 않게
+            state["scene"], state["scene_judges_left"] = None, 0
+
+    @classmethod
+    def _apply_name(cls, state: dict, judge: dict, changes: list[str]) -> None:
+        """S2 이름 흐름 (본편, 유저 이름이 있을 때만). 단계 상승 판단보다 먼저."""
+        ns, flags = state["name_state"], set(judge["flags"])
+        if not state["user_name"] or ns in ("none", "closed"):
+            return  # closed 뒤에는 이름 관련 판정을 무시
+
+        def event(name: str) -> None:  # 5단계 출발·남은 날 지문은 밀어내지 않음
+            if state["pending_event"] not in {"DEPARTURE", "LAST_NIGHT", *DAY_MARKERS}:
+                state["pending_event"] = name
+
+        def lose(points: int) -> None:
+            state["affection"] = max(0, min(AFFECTION_CAP[state["stage"]], state["affection"] - points))
+
+        if ns in ("asked", "accepted") and "refuse_name" in flags:
+            if state["stage"] in (3, 4):
+                cls._set_stage(state, 2)
+            lose(NAME_REFUSE_PENALTY)
+            state["name_state"] = "refused"
+            event("NAME_REFUSED")
+            changes.append(f"이름 거절 → {state['stage']}단계, 호감 -{NAME_REFUSE_PENALTY} (사과 전에는 3단계로 못 오름)")
+        elif ns == "asked":
+            # 물은 답장을 판정하는 차례(물은 판정 바로 다음)에는 유저가 아직 답하지 않았으므로 기다림
+            if state["turn"] >= state["used_events"].get("NAME_ASK", -10_000) + 2:
+                state["name_state"] = "accepted"
+                changes.append("이름 부르기 받아들임")
+        elif ns == "refused" and "apologize" in flags:
+            if state["stage"] == 2:
+                cls._set_stage(state, 3)
+                state["affection"] = max(state["affection"], NAME_FORGIVE_MIN_AFFECTION)
+            state["name_state"] = "forgiven"
+            event("NAME_FORGIVEN")
+            changes.append(f"사과 받음 → {state['stage']}단계, 이름 부르기 시작")
+        elif ns == "forgiven" and "refuse_name" in flags:
+            if state["stage"] == 3:
+                cls._set_stage(state, 2)
+            lose(NAME_REFUSE_AGAIN_PENALTY)
+            state["name_state"] = "closed"
+            event("NAME_REFUSED_AGAIN")
+            changes.append(f"이름 두 번째 거절 → {state['stage']}단계, 호감 -{NAME_REFUSE_AGAIN_PENALTY}, 다시는 이름 안 부름")
+
+    @staticmethod
     def _next_stage(state: dict) -> int | None:
         st, aff, flags = state["stage"], state["affection"], set(state["stage_flags"])
         if state.get("stage_user_msgs", 0) < MIN_STAGE_MSGS.get(st, 0):
             return None  # 호감·플래그가 차도 이 단계에서 이만큼은 대화해야 오름
         if st == 1 and aff >= 10 and flags & {"care", "protect"}:  # 첫날 안에 한 번 오르게 (앱과 같은 기준)
             return 2
+        if st == 2 and state.get("name_state") == "refused":
+            return None  # 이름을 거절한 뒤 사과 전에는 3단계로 못 오름
         if st == 2 and aff >= 40 and "outside" in flags:
             return 3
         if st == 3 and aff >= 60 and "sincere" in flags:
@@ -818,6 +942,10 @@ class Engine:
         changes.append(f"단계 상승 → {nxt}. {STAGE_NAMES[nxt]}")
         if nxt in STAGE_UP_SCENES:
             state["pending_event"] = f"STAGE_UP_{nxt}"  # 다음 답장에 그 단계의 상징 장면 (다른 사건보다 먼저)
+        if nxt == 3 and state.get("user_name") and state.get("name_state", "none") == "none":
+            state["name_state"] = "asked"  # 다음 답장이 STAGE_UP_3_NAMED (이름으로 부르고 싶다고 물음)
+            state["used_events"]["NAME_ASK"] = state["turn"]
+            changes.append("이름 부르기 물음 (STAGE_UP_3_NAMED)")
         if nxt == 4 and not state["route"] and "비밀1" not in state["revealed_secrets"]:
             state["revealed_secrets"].append("비밀1")  # 4단계 지침대로 1년 전 이야기를 털어놓게 함
             changes.append("비밀1 공개")

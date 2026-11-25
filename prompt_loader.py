@@ -5,7 +5,8 @@ from pathlib import Path
 BLOCK_RE = re.compile(r"<!-- BEGIN:(\w+) -->\n(.*?)\n<!-- END:\1 -->", re.S)
 
 REQUIRED = ["BASE_SYSTEM", "MAIN_WORLD", "STATE_BLOCK", "EPISODE_STATE", "MOTION_BLOCK", "OUTPUT_FORMAT", "OPENING", "JUDGE_SYSTEM", "FIRST_NIGHT",
-            "STAGE_UP_2", "STAGE_UP_3", "STAGE_UP_4", "STAGE_UP_6",
+            "STAGE_UP_2", "STAGE_UP_3", "STAGE_UP_3_NAMED", "STAGE_UP_4", "STAGE_UP_6",
+            "EVENT_NAME_REFUSED", "EVENT_NAME_FORGIVEN", "EVENT_NAME_REFUSED_AGAIN",
             "EVENT_WALK_HOME", "EVENT_ALLEY", "EVENT_ALLEY_CARE", "ROUTE_PURSUE_TEASE", "ROUTE_PURSUE_CARE",
             "ROUTE_MORNING_TEASE", "ROUTE_MORNING_CARE", "GIFT_MOMENT", "XMAS_LATE"] + [
     f"EVENT_{c}_{n}" for c in ("MARI", "TAEO") for n in (1, 2, 3)] + [

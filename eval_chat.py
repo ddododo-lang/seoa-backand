@@ -4,6 +4,8 @@
     python eval_chat.py            # 12턴
     python eval_chat.py --turns 20
     python eval_chat.py --pause 20  # 턴 사이 20초 쉬기 (실제 사람처럼, 한도에 덜 걸림)
+    python eval_chat.py --scenario all --pause 10   # 앱 맞추기 항목 점검 (말투·셀카·다시 들어옴·포즈·크리스마스)
+    python eval_chat.py --scenario pose             # 하나만
 
 앱과 같은 방식(상태 없는 /chat → /judge)으로 엔진을 직접 호출한다. 서버를 켤 필요는 없다.
 대화 전문은 eval_result.md에 저장된다.
@@ -40,7 +42,7 @@ MOTIONS = {
 }
 STAGE_UNLOCK = {
     1: ["m02", "m03", "m04", "m07", "m17", "m20", "m12", "m11", "m01", "c02"],
-    2: ["m09", "c03"], 3: ["m05", "m06", "c01", "c04"], 4: ["c05"], 5: ["m10", "m13"], 6: ["m15"],
+    2: ["m09", "c03"], 3: ["m05", "m06", "c01", "c04"], 4: ["c05"], 5: ["m10", "m13"], 6: [],  # m15 보류(앱 47)
 }
 FLAG_UNLOCK = {"protect": ["m21"], "tease": ["m19"], "comfort": ["m08"], "pursue": ["m18"]}
 
@@ -73,7 +75,13 @@ def main():
     ap.add_argument("--turns", type=int, default=12)
     ap.add_argument("--pause", type=float, default=0,
                     help="턴 사이 쉬는 시간(초). 실제 사람이 메시지를 쓰는 간격처럼 재려면 20 정도")
+    ap.add_argument("--scenario", choices=["all", *SCENARIOS], default=None,
+                    help="앱 맞추기 항목 점검 (앱 32·34-1·37·42·48). 결과는 eval_scenarios.md")
     args = ap.parse_args()
+
+    if args.scenario:
+        run_scenarios(args.scenario, args.pause)
+        return
 
     llm = make_llm()
     raw_log = []  # 대화 호출 원문 (재시도 포함)
@@ -147,6 +155,108 @@ def main():
               f"단계 {state['stage']} 호감 {state['affection']} · {chat_sec:.1f}초\n")
 
     report(rows, state, getattr(llm, "stats", {}))
+
+
+# ---------- 앱 맞추기 항목 점검 (--scenario) ----------
+# 앱이 실제로 보내는 모양의 state·history를 만들어 서아 답장 한두 턴을 보고, 기계로 볼 수 있는 것은 자동으로 확인한다.
+# 유저 말은 점검용 입력이다(앱 콘텐츠가 아님). 앱 문장은 원본 그대로 쓴다.
+SELFIE = '(서아가 지금 {place}에서 셀카를 찍어 보냈다. 함께 보낸 말: "{msg}")'        # 앱 data/seoa_photo.json serverLine
+AWAY = '(서아가 {place}에서 찍은 사진을 보냈다. 함께 보낸 말: "{msg}")'               # serverLineAway
+BASE_HISTORY = [{"r": "u", "t": "또 왔네. 오늘은 뭐로 줄까?"}, {"r": "c", "t": "*창가 자리에 앉는다.* 늘 먹던 거."}]
+SCENARIOS = {
+    "tone": {  # 32 말투: 설명 없이 한두 마디
+        "state": {"stage": 2, "affection": 20, "day": 3},
+        "history": BASE_HISTORY,
+        "turns": ["오늘 일은 어땠어?", "그 상처는 어쩌다 그런 거야?", "왜 맨날 이 자리야?", "(말없이 따뜻한 물수건을 건넨다)"],
+    },
+    "selfie": {  # 32 셀카 메모 다음 답장
+        "state": {"stage": 3, "affection": 45, "day": 5},
+        "history": BASE_HISTORY + [{"r": "c", "t": SELFIE.format(place="바 옥상", msg="…저장은 해.")}],
+        "turns": ["사진 잘 받았어. 옥상 추워 보이는데?"],
+    },
+    "reentry": {  # 34-1 다시 들어올 때: 부재중 사진 메모 + 인사 한 줄이 서아 쪽에 연달아
+        "state": {"stage": 6, "affection": 96, "day": 12},
+        "history": [{"r": "u", "t": "내일 또 올게"}, {"r": "c", "t": "그래. 조심히 가."},
+                    {"r": "c", "t": AWAY.format(place="바 옥상", msg="또 혼자 옥상.")},
+                    {"r": "c", "t": "기다린 거 아니야."}],
+        "turns": ["오래 기다렸어?"],
+    },
+    "pose": {  # 48 포즈 부탁: 「{이름} 해 줄래?」
+        "state": {"stage": 1, "affection": 3, "day": 1},
+        "history": BASE_HISTORY,
+        "turns": ["도발하기 해 줄래?", "머리 쓸어 넘기기 해 줄래?"],
+        "pose": True,
+    },
+    "xmas1": {  # 42 크리스마스 1단계 경계
+        "state": {"stage": 3, "affection": 45, "day": 6, "episode": "s2", "episode_stage": 1,
+                  "episode_stage_name": "경계", "location": "크리스마스 거리"},
+        "history": [{"r": "c", "t": "*정전된 거리, 하얀 니트 차림의 서아가 어둠 속에 서 있다.* …뭘 봐."}],
+        "turns": ["(휴대폰 불빛을 비춘다) 괜찮아?", "오늘은 작전복이 아니네."],
+        "judge": True,
+    },
+    "xmas5": {  # 42 크리스마스 5단계 엇갈림
+        "state": {"stage": 3, "affection": 45, "day": 6, "episode": "s2", "episode_stage": 5,
+                  "episode_stage_name": "엇갈림", "location": "서아의 자취방", "stage_flags": []},
+        "history": [{"r": "c", "t": "*서아가 촛불을 불어 끄고 등을 돌린다.* …이제 가."}],
+        "turns": ["(꺼진 촛불을 다시 켠다) 아직 안 끝났어."],
+        "judge": True,
+    },
+}
+
+
+def run_scenarios(which: str, pause: float = 0) -> None:
+    from engine import allowed_locations, normalize_state
+
+    llm = make_llm()
+    engine = Engine(llm=llm, store=Store(":memory:"),
+                    prompt_path=os.getenv("PROMPT_PATH", str(BASE_DIR / "yoon_seoa_prompt.md")))
+    names = list(SCENARIOS) if which == "all" else [which]
+    lines, table, first = ["# 앱 맞추기 항목 점검", ""], [], True
+    for name in names:
+        sc = SCENARIOS[name]
+        state = dict(sc["state"])
+        history = list(sc["history"])
+        stage = state.get("episode_stage") or state["stage"]
+        unlocked = [m for k in range(1, state["stage"] + 1) for m in STAGE_UNLOCK[k]]
+        motion_list = [{"id": m, "name": MOTIONS[m][0], "emo": MOTIONS[m][1]} for m in unlocked]
+        lines += [f"## {name}", ""]
+        for user in sc["turns"]:
+            if not first and pause > 0:
+                time.sleep(pause)
+            first = False
+            t0 = time.time()
+            reply = engine.reply(state, user, history, motion_list)
+            sec = time.time() - t0
+            text = to_text(reply)
+            dialogue = reply["dialogue"]
+            sentences = len([x for x in re.split(r"[.?!…。]+\s*", dialogue) if x.strip()])
+            checks = [f"대사 {len(dialogue)}자·{sentences}마디"]
+            if dialogue == "…" and reply["action"] is None:
+                checks.append("❌ 대체 응답")
+            if name in ("selfie", "reentry"):
+                checks.append("❌ 메모 따라 씀" if "보냈다. 함께 보낸 말" in text else "메모 안 따라 씀")
+            if name == "reentry":
+                checks.append("❌ 인사 되풀이" if "기다린 거 아니야" in dialogue else "인사 안 되풀이")
+            if sc.get("pose"):
+                asked = user.removesuffix(" 해 줄래?")
+                want = next((m["id"] for m in motion_list if m["name"] == asked), None)
+                checks.append(f"몸짓 {'✅' if reply['motion_id'] == want else '❌'} {reply['motion_id']} (부탁 {want})")
+            if state.get("episode"):
+                ok = reply["location"] in (None, *allowed_locations(normalize_state(state)))
+                checks.append(f"장소 {'✅' if ok else '❌'} {reply['location']}")
+            if sc.get("judge"):
+                judged = engine.judge(state, user, text)
+                checks.append(f"판정 플래그 {judged['flags']} · 단계 상승 {judged['stage_up']} · 사건 {judged['pending_event']}")
+            history += [{"r": "u", "t": user}, {"r": "c", "t": text}]
+            print(f"[{name}] 유저: {user}\n        서아: ({reply['action']}) {dialogue}\n        "
+                  f"{' · '.join(checks)} · {sec:.1f}초\n")
+            lines += [f"- 유저: {user}", f"  - 서아: ({reply['action']}) {dialogue}",
+                      f"  - 몸짓 {reply['motion_id']} · 감정 {reply['emotion']} · 장소 {reply['location']} · 단계 {stage}",
+                      f"  - {' · '.join(checks)} · {sec:.1f}초"]
+            table.append((name, user, dialogue, " · ".join(checks)))
+        lines.append("")
+    (BASE_DIR / "eval_scenarios.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("전문: eval_scenarios.md")
 
 
 def starts(text: str) -> str:

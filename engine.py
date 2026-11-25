@@ -28,6 +28,7 @@ STAGE_EVENTS = {
     6: ["MARI", "STORM", "DATE", "ROOFTOP", "BLACKOUT", "INJURY", "TAEO"],
 }
 ALLOWED_FLAGS = {"care", "protect", "outside", "sincere", "pursue", "tease", "comfort", "reveal_secret1"}
+ROUTES = ("tease", "care")  # 앱 51 갈래
 # 특별 에피소드(앱 42, server-sync.md): state.episode 로 오고, 본 이야기 단계 지침·사건 대신 블록을 넣는다
 EPISODES = {
     "s2": {"block": "EPISODE_XMAS", "locations": ["크리스마스 거리", "서아의 자취방"]},
@@ -85,6 +86,7 @@ def new_state() -> dict:
         "summarized_upto": 0,     # 이 메시지 id까지는 요약에 들어감 (세션 방식에서만 씀)
         "ending": None,           # None | "lovers" | "departed"
         "recent_lines": [],       # 직전 서아 응답 3개 (반복 방지)
+        "route": None,            # 갈래 "tease" | "care" | None (앱 51이 정함, 서버는 읽기만)
         "episode": None,          # 특별 에피소드 id (앱 42: "s2"). 없으면 본 이야기
         "episode_stage": None,    # 에피소드만의 단계 1~6 (앱이 정함)
         "episode_stage_name": "", # 에피소드 단계 이름 (앱 이름)
@@ -111,6 +113,8 @@ def normalize_state(raw: dict | None) -> dict:
             state[key] = value
     state["stage"] = max(1, min(6, state["stage"]))
     state["affection"] = max(0, min(100, state["affection"]))
+    if state["route"] not in ROUTES:
+        state["route"] = None
     if state["episode"] not in EPISODES:
         state["episode"] = None
     if state["episode"]:

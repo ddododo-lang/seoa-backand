@@ -68,6 +68,13 @@ ROUTE_EVENT_AFFECTION = {2: 40, 3: 55, 4: 65}
 ROUTE_SCENES = {"DATE", "WALK_HOME", "STORM", "ROOFTOP", "ALLEY"}
 SCENE_JUDGES = 2  # 갈래 장면이 시작된 뒤 판정 몇 번(≈ 3턴씩) 동안 장면 블록을 계속 넣을지
 STAGE_UP_SCENES = {2, 3, 4, 6}  # 단계가 오른 다음 답장에 한 번 넣는 상징 장면(STAGE_UP_n). 5는 DEPARTURE
+# 대화량 보조 점수 (판정 코드에서 계산, 모델에 맡기지 않음)
+TALK_LONG = 40             # 이 글자 수(공백 뺌) 이상이면 긴 메시지
+TALK_MAX_COUNT = 150       # 메시지 하나는 이 글자 수까지만 셈
+TALK_BONUS_FLAGS = {"care", "sincere", "comfort", "tease"}
+TALK_BONUS_STAGE_MAX = 8   # 단계마다 보너스 합계 상한(단계가 오르면 0부터)
+MIN_STAGE_MSGS = {2: 15, 3: 20, 4: 15}  # 그 단계에서 이만큼 유저 메시지를 보내야 다음 단계로(1→2·5→6 없음)
+NOT_TALK = re.compile(r"[\sㅋㅎㅠㅜㄷㄱ~!?.,…·\-_^*()\[\]<>:;'\"0-9]+")  # 이것만 있으면 「글」이 아님(이모지는 따로 뺌)
 GIFT_MOMENT_GAP = 10       # 같은 순간 선물은 준 뒤 유저 메시지 이만큼 지나야 다시 엶
 GIFT_MOMENT_QUIET = 3      # 순간 선물을 준 뒤 이만큼은 어떤 순간 선물도 열지 않음(자주 넣지 않기)
 DEPARTURE_DAYS = 3          # 5단계 출발까지 남은 날 (앱 51: 7일 → 사흘)
@@ -112,6 +119,8 @@ def new_state() -> dict:
         "scene_judges_left": 0,   # 그 장면 블록을 넣을 남은 판정 수
         "last_night_told": False, # 5단계 남은 하루의 밤 지문을 이미 냈는지
         "gift_moments": [],       # 앱 50: 지금 열 수 있는 순간 선물 [{id, name, when}] (앱이 이미 거름)
+        "stage_bonus": 0,         # 이 단계에서 받은 대화량 보너스 합계(상한 TALK_BONUS_STAGE_MAX)
+        "stage_user_msgs": 0,     # 이 단계에서 보낸 유저 메시지 수(에피소드 메시지 제외)
         "episode": None,          # 특별 에피소드 id (앱 42: "s2"). 없으면 본 이야기
         "episode_stage": None,    # 에피소드만의 단계 1~6 (앱이 정함)
         "episode_stage_name": "", # 에피소드 단계 이름 (앱 이름)
@@ -143,6 +152,11 @@ def normalize_state(raw: dict | None) -> dict:
         for g in (state["gift_moments"] if isinstance(state["gift_moments"], list) else [])
         if isinstance(g, dict) and str(g.get("id") or "").strip()
     ][:6]
+    for key in ("stage_bonus", "stage_user_msgs"):
+        try:
+            state[key] = max(0, int(state[key]))
+        except (TypeError, ValueError):
+            state[key] = 0
     if state["route"] not in ROUTES:
         state["route"] = None
     if state["scene"] not in ROUTE_SCENES:
@@ -362,7 +376,21 @@ class Engine:
         state = normalize_state(state)
         stage_before = state["stage"]
         judge = self._judge(state, last_user, last_reply, need_summary, recent or [])
+        progress = None
+        if not state["episode"]:  # 대화량 점수·메시지 수는 본 이야기만
+            msgs = [m.strip() for m in (last_user or "").split("\n") if m.strip()]
+            judge["talk_bonus"] = min(self._talk_bonus(msgs, judge), TALK_BONUS_STAGE_MAX - state["stage_bonus"])
+            state["stage_user_msgs"] += len(msgs)
         changes = self._apply(state, judge, None)
+        if not state["episode"]:
+            need = MIN_STAGE_MSGS.get(state["stage"], 0)
+            progress = {
+                "talk_bonus": judge["talk_bonus"], "stage_bonus": state["stage_bonus"],
+                "stage_bonus_max": TALK_BONUS_STAGE_MAX, "stage_user_msgs": state["stage_user_msgs"],
+                "min_msgs": need, "min_msgs_left": max(0, need - state["stage_user_msgs"]),
+            }
+            changes.append(f"대화 보너스 +{judge['talk_bonus']} (이 단계 {state['stage_bonus']}/{TALK_BONUS_STAGE_MAX})"
+                           f" · 다음 단계까지 최소 메시지 {progress['min_msgs_left']}개 남음")
         if need_summary and judge["summary"]:
             state["summary"] = judge["summary"]
             changes.append("요약 갱신")
@@ -382,6 +410,7 @@ class Engine:
             "pending_event": state["pending_event"],
             "judge": judge,
             "changes": changes,
+            "progress": progress,
         }
 
     # ---------- 프롬프트 조립 ----------
@@ -461,6 +490,26 @@ class Engine:
         return msgs
 
     # ---------- 사건 ----------
+    @staticmethod
+    def _talk_bonus(msgs: list[str], judge: dict) -> int:
+        """판정 한 번(최대 3턴)의 유저 메시지 글자 수로 주는 보너스. 짧은 메시지에 감점은 없음."""
+        if judge["affection_delta"] < 0:
+            return 0
+        seen, lengths = set(), []
+        for m in msgs:
+            text = re.sub(r"\s+", " ", m).strip()
+            key = re.sub(r"\s+", "", text)
+            plain = "".join(ch for ch in NOT_TALK.sub("", text) if ord(ch) < 0x2600 or 0xAC00 <= ord(ch) <= 0xD7A3)
+            if (text.startswith("[유저가 선물함:") or POSE_REQUEST.match(text) or not plain or key in seen):
+                lengths.append(0)  # 선물 줄·포즈 부탁·ㅋㅎ·기호·이모지만·같은 말 반복은 글자 수에서 뺌
+            else:
+                lengths.append(min(len(key), TALK_MAX_COUNT))
+            seen.add(key)
+        long_n = sum(n >= TALK_LONG for n in lengths)
+        if len(msgs) >= 3 and long_n == len(msgs) and TALK_BONUS_FLAGS & set(judge["flags"]):
+            return 2
+        return 1 if long_n >= 2 else 0
+
     @staticmethod
     def _tick_scene(state: dict) -> None:
         """진행 중인 갈래 장면의 남은 판정 수를 하나 줄이고, 다 되면 장면을 닫는다."""
@@ -569,7 +618,9 @@ class Engine:
 
         cap = AFFECTION_CAP[state["stage"]]
         before = state["affection"]
-        state["affection"] = max(0, min(cap, before + judge["affection_delta"]))
+        bonus = judge.get("talk_bonus", 0)
+        state["affection"] = max(0, min(cap, before + judge["affection_delta"] + bonus))
+        state["stage_bonus"] += bonus
         if state["affection"] != before:
             changes.append(f"호감도 {before} → {state['affection']}")
 
@@ -622,6 +673,8 @@ class Engine:
     @staticmethod
     def _next_stage(state: dict) -> int | None:
         st, aff, flags = state["stage"], state["affection"], set(state["stage_flags"])
+        if state.get("stage_user_msgs", 0) < MIN_STAGE_MSGS.get(st, 0):
+            return None  # 호감·플래그가 차도 이 단계에서 이만큼은 대화해야 오름
         if st == 1 and aff >= 10 and flags & {"care", "protect"}:  # 첫날 안에 한 번 오르게 (앱과 같은 기준)
             return 2
         if st == 2 and aff >= 40 and "outside" in flags:
@@ -638,6 +691,7 @@ class Engine:
     def _advance(state: dict, nxt: int, changes: list[str]) -> None:
         state["stage"] = nxt
         state["stage_flags"] = []
+        state["stage_bonus"], state["stage_user_msgs"] = 0, 0  # 단계마다 새로 셈
         changes.append(f"단계 상승 → {nxt}. {STAGE_NAMES[nxt]}")
         if nxt in STAGE_UP_SCENES:
             state["pending_event"] = f"STAGE_UP_{nxt}"  # 다음 답장에 그 단계의 상징 장면 (다른 사건보다 먼저)

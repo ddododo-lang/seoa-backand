@@ -147,7 +147,7 @@ def front_judge(body: JudgeIn):
         body.state, body.last_user, body.last_reply,
         need_summary=body.need_summary, recent=[t.model_dump() for t in body.recent],
     )
-    response = {k: result[k] for k in ("state", "stage_up", "flags", "pending_event")}
+    response = {k: result[k] for k in ("state", "stage_up", "flags", "pending_event", "progress")}
     if DEBUG:
         response.update(judge=result["judge"], changes=result["changes"])
     return response

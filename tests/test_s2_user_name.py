@@ -207,11 +207,19 @@ class XmasTest(unittest.TestCase):
 
     def test_system(self):
         s = system_for(self.XMAS)
-        self.assertIn("이 밤에는 처음부터 유저 이름으로 부른다", s)
+        # S2-2: 첫 답장부터 이름으로만
+        self.assertIn('- 이 밤에는 첫 답장부터 유저를 이름으로 부른다. "사장님"이라고 부르지 않는다(유저 이름이 없음이면 "사장님").', s)
+        self.assertNotIn("놀릴 때만 가끔", s)
         self.assertIn("- 유저 이름: 도윤", s)
         self.assertNotIn("이름 부르기:", s)
         self.assertNotIn("마리", s)
         self.assertNotIn("강태오", s)
+
+    def test_main_unchanged(self):  # S2-2: 본편 system 에는 크리스마스 이름 줄이 없음
+        s = system_for({"stage": 3, "user_name": "도윤", "name_state": "accepted"})
+        self.assertNotIn("이 밤에는 첫 답장부터", s)
+        self.assertIn("- 이름 부르기: 진지한 순간에 이름", s)
+        self.assertIn('이름을 부를 수 있을 때도 진지한 순간에만 이름을 부르고, 평소에는 "사장님"이다.', s)
 
     def test_no_refusal_in_episode(self):
         llm = Stub(["refuse_name"])

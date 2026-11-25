@@ -42,14 +42,18 @@ def system(state):
 class SplitTest(unittest.TestCase):
     def test_xmas_has_no_main_world(self):
         s = system(XMAS)
-        # EPISODE_XMAS 의 「마리·강태오 등장 … 꺼내지 않는다」 금지 줄은 원래 크리스마스 원고라 그대로 둔다
-        ban = next(x for x in engine().blocks["EPISODE_XMAS"].split("\n") if "마리·강태오" in x)
-        rest = s.replace(ban, "")
-        for word in MAIN_ONLY:
-            self.assertNotIn(word, rest, word)
+        for word in MAIN_ONLY:  # S1-1: 「마리」「강태오」도 크리스마스 system 어디에도 없다
+            self.assertNotIn(word, s, word)
+        self.assertIn("본 이야기의 인물·사건·의뢰는 꺼내지 않는다.", s)
         self.assertNotIn("# 주변 인물", s)
         self.assertNotIn("# 비밀", s)
         self.assertNotIn("# 배경", s)
+
+    def test_3d_line_is_common(self):  # S1-1: 공통 [몸짓] 절 맨 위
+        base = engine().blocks["BASE_SYSTEM"]
+        self.assertIn("# 몸짓\n- 화면에는 서아의 3D 모습이 함께 보이고, 네가 고른 몸짓이 그대로 재생된다.", base)
+        self.assertNotIn("3D 모습", engine().blocks["MAIN_WORLD"])
+        self.assertIn("3D 모습", system(XMAS))
 
     def test_main_has_main_world_and_every_old_line(self):
         s = system({"stage": 5, "day": 4, "departure_days_left": 2, "revealed_secrets": ["비밀1"]})

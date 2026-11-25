@@ -144,6 +144,13 @@ class StayedTest(unittest.TestCase):  # 5
         st = judge(st, "응")["state"]
         self.assertEqual(st["pending_event"], "TAEO_3")
 
+    def test_no_random_event_before_stayed(self):  # 첫 아침·마무리 사이에 무작위 사건이 끼지 않음
+        st = engine(Stub()).judge({**self.S6, "short_streak": 2}, "응", "셔츠, 빌렸어. 돌려줄 생각은 없고.")["state"]
+        self.assertIsNone(st["pending_event"])
+        st = judge({**self.S6, "short_streak": 2, "stage_user_msgs": STAYED_MAX_MSGS}, "응")["state"]
+        self.assertEqual(st["ending"], "stayed")
+        self.assertIsNone(st["pending_event"])  # stayed 를 넣은 판정에도 사건 없음
+
     def test_time_advance_counts_as_morning(self):
         st = judge(self.S6, "응", time_advance=True)["state"]
         self.assertTrue(st["morning_done"])

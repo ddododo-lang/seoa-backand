@@ -611,6 +611,8 @@ class Engine:
 
         if state["pending_event"] or state["ending"] == "departed":
             return None  # 이미 예약된 사건(DEPARTURE 등)이 있거나 실패 엔딩 뒤. stayed 뒤에는 연인 일상 사건이 이어짐
+        if state["stage"] == 6 and state["route"] and state["ending"] != "stayed":
+            return None  # 6단계 성공 전(첫 아침 → 조연 마무리, 길어야 메시지 15개)에는 무작위 사건을 끼우지 않음
         if (
             state["short_streak"] < SHORT_STREAK_TRIGGER
             and state["turns_since_event"] < QUIET_TURNS_TRIGGER
@@ -665,6 +667,7 @@ class Engine:
             why = "조연 마무리 뒤" if state["morning_done"] and finale_shown else f"6단계 메시지 {state['stage_user_msgs']}개"
             state["ending"] = "stayed"
             state["mari_step"] = state["taeo_step"] = 3  # 마무리는 다시 나오지 않음
+            state["short_streak"], state["turns_since_event"] = 0, 0  # 에필로그 바로 뒤에 무작위 사건이 붙지 않게
             changes.append(f"엔딩: 서아가 남음 (stayed, {why})")
             return
         if name and state["morning_done"] and state[f"{name.lower()}_step"] < 3 and not pend:

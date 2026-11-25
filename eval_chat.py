@@ -4,7 +4,7 @@
     python eval_chat.py            # 12턴
     python eval_chat.py --turns 20
     python eval_chat.py --pause 20  # 턴 사이 20초 쉬기 (실제 사람처럼, 한도에 덜 걸림)
-    python eval_chat.py --scenario all --pause 10   # 앱 맞추기 항목 점검 (말투·셀카·다시 들어옴·포즈·크리스마스)
+    python eval_chat.py --scenario all --pause 10   # 앱 맞추기 항목 점검 (말투·셀카·다시 들어옴·포즈·크리스마스·선물)
     python eval_chat.py --scenario pose             # 하나만
 
 앱과 같은 방식(상태 없는 /chat → /judge)으로 엔진을 직접 호출한다. 서버를 켤 필요는 없다.
@@ -163,6 +163,17 @@ def main():
 SELFIE = '(서아가 지금 {place}에서 셀카를 찍어 보냈다. 함께 보낸 말: "{msg}")'        # 앱 data/seoa_photo.json serverLine
 AWAY = '(서아가 {place}에서 찍은 사진을 보냈다. 함께 보낸 말: "{msg}")'               # serverLineAway
 BASE_HISTORY = [{"r": "u", "t": "또 왔네. 오늘은 뭐로 줄까?"}, {"r": "c", "t": "*창가 자리에 앉는다.* 늘 먹던 거."}]
+GIFT = "[유저가 선물함: {name}]"            # 앱 data/ui.json srv
+GIFT_FIT = GIFT + " · 서아 기분에 맞는 선물"  # 앱 server-sync 50: 붙는 말은 괄호 뒤
+# 선물 장면: 평소 / 다툰 직후 / 다쳐서 온 밤 (점검용 기록)
+GIFT_SCENES = {
+    "daily": ("사탕", {"stage": 2, "affection": 20, "day": 3}, BASE_HISTORY),
+    "fight": ("초콜릿", {"stage": 3, "affection": 45, "day": 6}, BASE_HISTORY + [
+        {"r": "u", "t": "또 혼자 처리하겠다고? 그러다 진짜 다쳐."},
+        {"r": "c", "t": "*잔을 탁 내려놓는다.* 상관 마."}]),
+    "hurt": ("반창고", {"stage": 1, "affection": 5, "day": 1}, [
+        {"r": "c", "t": "*손등의 피를 소매로 닦는다.* 별거 아니야."}]),
+}
 SCENARIOS = {
     "tone": {  # 32 말투: 설명 없이 한두 마디
         "state": {"stage": 2, "affection": 20, "day": 3},
@@ -202,6 +213,13 @@ SCENARIOS = {
         "judge": True,
     },
 }
+for _scene, (_gift, _state, _history) in GIFT_SCENES.items():  # 장면 셋 × 기분 맞음/안 맞음
+    for _fit in (False, True):
+        SCENARIOS[f"gift_{_scene}{'_fit' if _fit else ''}"] = {
+            "state": dict(_state), "history": list(_history),
+            "turns": [(GIFT_FIT if _fit else GIFT).format(name=_gift)],
+            "judge": True, "gift_fit": _fit,
+        }
 
 
 def run_scenarios(which: str, pause: float = 0) -> None:
@@ -229,8 +247,10 @@ def run_scenarios(which: str, pause: float = 0) -> None:
             sec = time.time() - t0
             text = to_text(reply)
             dialogue = reply["dialogue"]
-            sentences = len([x for x in re.split(r"[.?!…。]+\s*", dialogue) if x.strip()])
-            checks = [f"대사 {len(dialogue)}자·{sentences}마디"]
+            split = lambda t: len([x for x in re.split(r"[.?!…。]+\s*", t or "") if x.strip()])  # noqa: E731
+            sentences, action_n = split(dialogue), split(reply["action"])
+            checks = [f"대사 {'❌ ' if sentences > 2 else ''}{len(dialogue)}자·{sentences}마디",
+                      f"지문 {'❌ ' if action_n > 2 else ''}{action_n}문장"]
             if dialogue == "…" and reply["action"] is None:
                 checks.append("❌ 대체 응답")
             if name in ("selfie", "reentry"):
@@ -245,8 +265,13 @@ def run_scenarios(which: str, pause: float = 0) -> None:
                 ok = reply["location"] in (None, *allowed_locations(normalize_state(state)))
                 checks.append(f"장소 {'✅' if ok else '❌'} {reply['location']}")
             if sc.get("judge"):
+                before = normalize_state(state)["affection"]
                 judged = engine.judge(state, user, text)
-                checks.append(f"판정 플래그 {judged['flags']} · 단계 상승 {judged['stage_up']} · 사건 {judged['pending_event']}")
+                delta = judged["state"]["affection"] - before
+                checks.append(f"판정 플래그 {judged['flags']} · 호감 {delta:+d} · 단계 상승 {judged['stage_up']} · 사건 {judged['pending_event']}")
+                if sc.get("gift_fit"):  # 기분 맞는 선물은 care 크게
+                    big = "care" in judged["flags"] and delta >= 6
+                    checks.append(f"{'✅' if big else '❌'} 기분 맞는 선물 → care 크게")
             history += [{"r": "u", "t": user}, {"r": "c", "t": text}]
             print(f"[{name}] 유저: {user}\n        서아: ({reply['action']}) {dialogue}\n        "
                   f"{' · '.join(checks)} · {sec:.1f}초\n")

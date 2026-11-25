@@ -116,6 +116,20 @@ class XmasEpisodeTest(unittest.TestCase):  # 9
         self.assertIn(result["state"]["stage"], (1, 2))  # 본 이야기는 예전 규칙대로 계산
 
 
+class GiftTest(unittest.TestCase):  # 13 (앱 49·50)
+    def test_rule_in_chat_and_episode_prompts(self):
+        e = engine()
+        for st in ({}, XMAS):
+            system = e._build_system(normalize_state(st), None, MOTIONS)
+            self.assertIn("[유저가 선물함: {이름}]", system)
+            self.assertIn("미리 정한 반응 없이 지금 장면에 맞게 받는다", system)
+
+    def test_judge_guidance(self):
+        judge = e = engine().blocks["JUDGE_SYSTEM"]
+        self.assertIn("「서아 기분에 맞는 선물」 또는 「순간 선물」이 붙으면: flags에 \"care\", affection_delta +6 ~ +10", judge)
+        self.assertIn("「또」가 붙으면", e)
+
+
 class HoldTest(unittest.TestCase):  # 10·11
     def test_rooftop_dance_and_m15_removed(self):
         text = Path(PROMPT).read_text(encoding="utf-8")

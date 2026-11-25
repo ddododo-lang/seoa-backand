@@ -19,13 +19,13 @@ from prompt_loader import load_blocks, render
 # ---------- 게임 규칙 (여기서 조정) ----------
 STAGE_NAMES = {1: "경계", 2: "티키타카", 3: "썸", 4: "고백 직전", 5: "엇갈림", 6: "연인"}  # 앱 단계 이름과 같게
 AFFECTION_CAP = {1: 30, 2: 50, 3: 70, 4: 85, 5: 95, 6: 100}
-STAGE_EVENTS = {
-    1: ["INJURY", "TAEO"],
-    2: ["INJURY", "MARI", "TAEO", "BLACKOUT"],
-    3: ["MARI", "STORM", "ROOFTOP", "BLACKOUT"],  # DATE 는 2단계 장난 갈래 사건으로 옮김(앱 51)
-    4: ["STORM", "ROOFTOP", "TAEO"],
-    5: ["TAEO"],
-    6: ["MARI", "STORM", "DATE", "ROOFTOP", "BLACKOUT", "INJURY", "TAEO"],
+STAGE_EVENTS = {  # 무작위 사건. 마리·태오는 차례·단계 범위(SIDE_SCENE_STAGES)로 따로 고름
+    1: ["INJURY"],
+    2: ["INJURY", "BLACKOUT"],
+    3: ["STORM", "ROOFTOP", "BLACKOUT"],  # DATE 는 2단계 장난 갈래 사건으로 옮김(앱 51)
+    4: ["STORM", "ROOFTOP"],
+    5: [],
+    6: ["STORM", "DATE", "ROOFTOP", "BLACKOUT", "INJURY"],  # 연인 일상. 마리·태오 마무리는 첫 아침 뒤 따로 한 번
 }
 ALLOWED_FLAGS = {"care", "protect", "outside", "sincere", "pursue", "tease", "comfort", "reveal_secret1"}
 ROUTES = ("tease", "care")  # 앱 51 갈래
@@ -88,6 +88,13 @@ GIFT_MOMENT_QUIET = 3      # 순간 선물을 준 뒤 이만큼은 어떤 순간
 SIDE_CHARS = ("MARI", "TAEO")
 SIDE_STEP_KEYS = ("mari_step", "taeo_step")
 SIDE_OF_ROUTE = {"tease": "MARI", "care": "TAEO"}
+SIDE_SCENE_STAGES = {  # 조연 → 차례(1 처음, 2 두 번째) → 나올 수 있는 단계. 범위 밖이면 건너뛰지 않고 기다림
+    "MARI": {1: {2, 3}, 2: {3, 4}},
+    "TAEO": {1: {1, 2}, 2: {4}},
+}
+OTHER_ROUTE_FIRST = {"MARI": {3}, "TAEO": {1, 2}}  # 다른 갈래의 조연은 이 단계에서 「처음」 한 번만, 나오면 닫음
+SIDE_WEIGHT = 2              # 갈래가 정해지면 그 갈래 조연을 두 배 자주
+SIDE_EVENTS = {f"{c}_{n}" for c in SIDE_CHARS for n in (1, 2, 3)}  # pending_event 값: 조연_차례
 DEPARTURE_DAYS = 3          # 5단계 출발까지 남은 날 (앱 51: 7일 → 사흘)
 # 남은 날이 줄어든 다음 답장의 action 맨 앞에 한 번 붙이는 지문 (pending_event 로 전달, 앱이 답장 뒤 비움)
 DAY_MARKERS = {
@@ -200,7 +207,7 @@ def normalize_state(raw: dict | None) -> dict:
     ev = state["pending_event"]
     if isinstance(ev, str):
         ev = ev.removeprefix("EVENT_")
-        known = ({e for v in STAGE_EVENTS.values() for e in v} | {"DEPARTURE"} | ROUTE_SCENES | set(DAY_MARKERS)
+        known = ({e for v in STAGE_EVENTS.values() for e in v} | {"DEPARTURE"} | ROUTE_SCENES | set(DAY_MARKERS) | SIDE_EVENTS | set(SIDE_CHARS)
                  | {f"STAGE_UP_{n}" for n in STAGE_UP_SCENES})
         state["pending_event"] = ev if ev in known else None
     else:
@@ -510,6 +517,8 @@ class Engine:
             parts.append(self.blocks[f"ROUTE_PURSUE_{state['route'].upper()}"])
         if state["stage"] == 6 and state["route"]:
             parts.append(self.blocks[f"ROUTE_MORNING_{state['route'].upper()}"])
+        if event in ("MARI", "TAEO"):  # 예전 값: 차례로 고름
+            event = f"{event}_{max(1, min(3, state[event.lower() + '_step']))}"
         if event and f"EVENT_{event}" in self.blocks:  # 이번 답장의 사건(시작 턴)
             parts.append(self.blocks[f"EVENT_{event}"])
         elif event and event.startswith("STAGE_UP_") and event in self.blocks:
@@ -604,14 +613,41 @@ class Engine:
             # 갈래가 정해지면 2~5단계에서 갈래 사건은 무작위로 나오지 않음(자기 갈래 사건은 정해진 때 한 번, 다른 갈래 것은 안 나옴)
             and not (state["route"] and 2 <= state["stage"] <= 5 and e in ROUTE_SCENES)
         ]
+        weights = [1] * len(candidates)
+        if not state["scene"]:  # 갈래 장면이 열려 있는 동안에는 조연을 넣지 않음
+            for name in SIDE_CHARS:
+                n = self._side_next(state, name)
+                if n and state["turn"] - state["used_events"].get(name, -10_000) >= EVENT_COOLDOWN:
+                    candidates.append(f"{name}_{n}")
+                    weights.append(SIDE_WEIGHT if SIDE_OF_ROUTE.get(state["route"] or "") == name else 1)
         if not candidates:
             return None
-        event = random.choice(candidates)
+        event = random.choices(candidates, weights)[0]
         state["pending_event"] = event
-        state["used_events"][event] = state["turn"]
+        state["used_events"][event.split("_")[0] if event in SIDE_EVENTS else event] = state["turn"]
+        if event in SIDE_EVENTS:
+            self._side_step(state, event)
         state["short_streak"] = 0
         state["turns_since_event"] = 0
         return event
+
+    # ---------- 조연 (앱 54) ----------
+    @staticmethod
+    def _side_next(state: dict, name: str) -> int | None:
+        """그 조연이 지금 단계에서 나올 수 있으면 다음 차례(1 처음 · 2 두 번째), 아니면 None. 마무리(3)는 _side_finale."""
+        step, stage, route = state[f"{name.lower()}_step"], state["stage"], state["route"]
+        if route and SIDE_OF_ROUTE[route] != name:  # 다른 갈래의 조연: 「처음」 한 번만
+            return 1 if step == 0 and stage in OTHER_ROUTE_FIRST[name] else None
+        n = step + 1
+        return n if n in SIDE_SCENE_STAGES[name] and stage in SIDE_SCENE_STAGES[name][n] else None
+
+    @staticmethod
+    def _side_step(state: dict, event: str) -> None:
+        """조연 장면을 넣은 판정에서 차례를 올린다. 다른 갈래의 조연은 「처음」 뒤 닫음(3)."""
+        name, n = event.split("_")
+        key = f"{name.lower()}_step"
+        route = state["route"]
+        state[key] = 3 if route and SIDE_OF_ROUTE[route] != name else max(state[key], int(n))
 
     # ---------- 판정 ----------
     def _judge(self, state: dict, user_message: str, reply: str,

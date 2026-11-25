@@ -87,10 +87,10 @@ class StageUpSceneTest(unittest.TestCase):  # 3
             st["pending_event"] = None  # 앱이 답장 뒤 비움 (6단계 대사는 STAGE_6 지침에도 원래 있어서 블록 제목으로 확인)
             self.assertNotIn("# 단계가 막 올랐다", system_for(st))
 
-    def test_4_to_5_keeps_departure(self):
+    def test_4_to_5_is_crisis(self):  # S4: DEPARTURE 대신 CRISIS
         st = normalize_state({"stage": 4})
         Engine._advance(st, 5, [])
-        self.assertEqual(st["pending_event"], "DEPARTURE")
+        self.assertEqual(st["pending_event"], "CRISIS")
 
     def test_judge_returns_scene_and_it_survives_normalize(self):
         e = engine(JudgeStub({"affection_delta": 3, "flags": ["sincere"], "time_advance": False,

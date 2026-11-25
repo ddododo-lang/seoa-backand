@@ -126,28 +126,18 @@ class RouteEventsTest(unittest.TestCase):  # 2
             self.assertEqual(out["location"], loc)
 
 
-class DepartureTest(unittest.TestCase):  # 3·6
-    def test_three_days_and_markers(self):
+class DepartureTest(unittest.TestCase):  # 3·6 (S4: 남은 날·실패 엔딩 대신 위기 → 연인 / 엇갈림 → 화해, tests/test_s4_crisis.py)
+    def test_no_days_left_any_more(self):
         st = normalize_state({"stage": 4})
         Engine._advance(st, 5, [])
-        self.assertEqual((st["departure_days_left"], st["pending_event"]), (3, "DEPARTURE"))
-        self.assertIn("출발은 사흘 뒤", engine().blocks["EVENT_DEPARTURE"])
+        self.assertEqual((st["departure_days_left"], st["pending_event"]), (None, "CRISIS"))
         r = judge({"stage": 5, "affection": 80, "departure_days_left": 3}, time_advance=True)
-        self.assertEqual((r["state"]["departure_days_left"], r["pending_event"]), (2, "DAYS_LEFT_2"))
-        out = engine(Stub()).reply(r["state"], "…", [], [])
-        self.assertTrue(out["action"].startswith("서아가 떠나기까지, 이틀."))
-        r = judge(dict(r["state"], pending_event=None), time_advance=True)
-        self.assertEqual(r["pending_event"], "DAYS_LEFT_1")
-        r = judge(dict(r["state"], pending_event=None), time_of_day="밤 11시")
-        self.assertEqual(r["pending_event"], "LAST_NIGHT")
-        r = judge(dict(r["state"], pending_event=None), time_of_day="밤 11시")
-        self.assertNotEqual(r["pending_event"], "LAST_NIGHT")  # 한 번만
-        r = judge(dict(r["state"], pending_event=None), time_advance=True)
-        self.assertEqual(r["state"]["ending"], "departed")
+        self.assertIsNone(r["state"]["departure_days_left"])
+        self.assertNotIn(r["pending_event"], ("DAYS_LEFT_2", "DAYS_LEFT_1", "LAST_NIGHT"))
 
     def test_rewind_state_continues(self):
         st = normalize_state({"stage": 5, "affection": 76, "departure_days_left": 3, "ending": None, "route": "care"})
-        self.assertEqual((st["departure_days_left"], st["ending"]), (3, None))
+        self.assertEqual((st["crisis"], st["ending"]), ("on", None))  # 예전 5단계 저장은 위기 중으로
         r = judge(st, "가지 마.", flags=["pursue"])
         self.assertEqual(r["state"]["stage"], 6)
 

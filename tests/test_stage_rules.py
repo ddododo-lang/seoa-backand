@@ -49,7 +49,7 @@ class StageNamesTest(unittest.TestCase):
 
     def test_names_match_app(self):
         from engine import STAGE_NAMES
-        self.assertEqual(list(STAGE_NAMES.values()), ["경계", "티키타카", "썸", "고백 직전", "엇갈림", "연인"])
+        self.assertEqual(list(STAGE_NAMES.values()), ["경계", "티키타카", "썸", "고백 직전", "위기", "연인"])  # S4
 
     def test_prompt_headings_match(self):
         from engine import STAGE_NAMES

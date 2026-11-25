@@ -88,7 +88,7 @@ class HintTest(unittest.TestCase):  # A4
         self.assertIsNone(st["hint_due"])  # 최소 전
 
     def test_in_next_reply_once(self):
-        st = judge({"stage": 3, "affection": 30, "stage_user_msgs": 8}, "응")["state"]
+        st = judge({"stage": 3, "affection": 30, "stage_user_msgs": 8, "used_events": {"NIGHT_END_3": 0}}, "응")["state"]
         self.assertEqual(st["hint_due"], "HINT_3")
         llm = Stub()
         engine(llm).reply(st, "응", [], [])
@@ -101,7 +101,7 @@ class HintTest(unittest.TestCase):  # A4
         self.assertIsNone(st["hint_due"])
 
     def test_again_after_10_and_max_two(self):
-        st = judge({"stage": 2, "affection": 20, "stage_user_msgs": 8}, "응")["state"]
+        st = judge({"stage": 2, "affection": 20, "stage_user_msgs": 8, "used_events": {"NIGHT_END_2": 0}}, "응")["state"]
         self.assertEqual((st["hint_due"], st["stage_hints"], st["hint_msgs"]), ("HINT_2", 1, 9))
         st = judge(dict(st, stage_user_msgs=17, short_streak=0), "응")["state"]  # 9 + 9
         self.assertIsNone(st["hint_due"])

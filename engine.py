@@ -118,6 +118,18 @@ RIFT_AFFECTION = 40        # 엇갈림이 되면 호감
 RIFT_OPEN_MSGS = 6         # 엇갈림(다음 밤부터) 유저 메시지 6개 뒤 RECONCILE_OPEN
 RECONCILE_HINT_MSGS = 3    # RECONCILE_OPEN 뒤 3개 지나 HINT_6
 RECONCILE_MIN_AFFECTION = 55
+# S4-C 밤 넘기기: 경계 → 티키타카, 티키타카 → 썸 뒤(상징 장면 다음부터 메시지 4개) · 엇갈림이 된 뒤
+NEXT_NIGHT = "[다음 밤]"       # 앱이 시간 카드 뒤 보내는 유저 메시지 (유저의 말이 아님)
+NIGHT_NEXT = {  # night_next → (시간 카드 문구 night_card, 넘기는 날 수, 마무리 블록)
+    "NIGHT_START_2": ("2일째 밤", 1, "NIGHT_END_1"),
+    "NIGHT_START_3_TEASE": ("며칠 뒤 밤", 3, "NIGHT_END_TEASE"),
+    "NIGHT_START_3_CARE": ("며칠 뒤 밤", 3, "NIGHT_END_CARE"),
+    "RIFT_NIGHT": ("며칠 뒤 밤", 3, None),  # 마무리는 RIFT_START 가 대신함
+}
+NIGHT_END_STAGES = (2, 3)
+NIGHT_END_AFTER = 5         # 그 단계 유저 메시지(상징 장면을 받은 메시지 + 그 뒤 4개)
+NIGHT_WAIT_MAX = 6          # 예전 앱처럼 「[다음 밤]」이 안 오면 유저 메시지 이만큼 뒤 서버가 밤을 넘김(첫마디 없이)
+NIGHT_LOCATION = "바 '라스트 오더' 1층"
 WON_KEYS = {"WON_TEASE": "연기아니지", "WON_CARE": "내려가자", "WON_RECONCILE": "늦었잖아"}  # 판정한 답장에 이 원고 대사가 있으면 다시 넣지 않음
 GIFT_MOMENT_GAP = 10       # 같은 순간 선물은 준 뒤 유저 메시지 이만큼 지나야 다시 엶
 FIRST_NIGHT_TURNS = 3     # 첫날 밤 사정(손등의 피)은 유저 메시지 이만큼까지만 넣음. 그 뒤엔 같은 묘사가 반복되지 않게 뺌
@@ -203,6 +215,9 @@ def new_state() -> dict:
         "stage_label": "경계",    # S4: 앱 표시용. crisis 가 rift 면 「엇갈림」, 아니면 단계 이름
         "rewind_offer": False,    # S4: 엇갈림이 된 판정에서만 true (앱이 되감기 권유를 한 번)
         "won_line": None,         # S4: 마음을 확인한 답장에 성공 대사가 없었으면 다음 답장에 넣을 WON_* 블록
+        "night_next": None,       # S4-C: 다음 밤 첫마디 블록(NIGHT_NEXT). 있으면 앱이 마무리에 한 번 답한 뒤 시간 카드 → 「[다음 밤]」
+        "night_card": None,       # S4-C: 시간 카드 문구 「2일째 밤」·「며칠 뒤 밤」
+        "night_wait": 0,          # S4-C: night_next 를 정한 뒤 「[다음 밤]」 없이 온 유저 메시지 수
     }
 
 
@@ -273,7 +288,10 @@ def normalize_state(raw: dict | None) -> dict:
             state[key] = max(0, min(3, int(state[key])))
         except (TypeError, ValueError):
             state[key] = 0
-    for key in ("stage_bonus", "stage_user_msgs", "stage_hints", "hint_msgs", "crisis_msgs"):
+    if state["night_next"] not in NIGHT_NEXT or state["episode"]:
+        state["night_next"] = None
+    state["night_card"] = NIGHT_NEXT[state["night_next"]][0] if state["night_next"] else None
+    for key in ("stage_bonus", "stage_user_msgs", "stage_hints", "hint_msgs", "crisis_msgs", "night_wait"):
         try:
             state[key] = max(0, int(state[key]))
         except (TypeError, ValueError):
@@ -322,7 +340,7 @@ def normalize_state(raw: dict | None) -> dict:
         if ev == "DEPARTURE" and not state["episode"]:
             ev = "CRISIS"  # 예전 앱이 5단계에 막 오른 상태를 보내면 위기 장면으로
         known = ({e for v in STAGE_EVENTS.values() for e in v} | ROUTE_SCENES | SIDE_EVENTS | set(SIDE_CHARS)
-                 | {f"STAGE_UP_{n}" for n in STAGE_UP_SCENES} | NAME_EVENTS | CRISIS_EVENTS)
+                 | {f"STAGE_UP_{n}" for n in STAGE_UP_SCENES} | NAME_EVENTS | CRISIS_EVENTS | {"NIGHT_END"})
         state["pending_event"] = ev if ev in known else None  # DEPARTURE·DAYS_LEFT_*·LAST_NIGHT 는 버림(S4)
     else:
         state["pending_event"] = None
@@ -420,15 +438,20 @@ class Engine:
         state["_xmas_late"] = self._xmas_late(state, history)
         state["_first_night"] = sum(1 for h in history if h.get("r") == "u") < FIRST_NIGHT_TURNS
         event = state["pending_event"]
-        state["_hint"] = None if event else self._hint_now(state["hint_due"], history)
+        # S4-C: 앱의 「[다음 밤]」 → 다음 밤 첫마디 (night_next 가 있을 때만, 유저의 말로 다루지 않음)
+        night = state["night_next"] if user_message.strip() == NEXT_NIGHT and not state["episode"] else None
+        state["_night"] = night
+        if night:
+            event = None
+        state["_hint"] = None if event or night else self._hint_now(state["hint_due"], history)
         system = self._build_system(state, event, motion_list)
         opening = self.blocks["OPENING"].strip()
         # OPENING은 모델이 만들지 않고 고정. 에피소드는 앱이 자기 첫 장면을 기록으로 보내므로 바 오프닝을 넣지 않음
         msgs = [] if state["episode"] else [{"role": "assistant", "content": opening}]
         for m in history[-HISTORY_MESSAGES:]:
             text = str(m.get("t") or "").strip()
-            if not text or text == opening or m.get("r") not in ("u", "c"):
-                continue
+            if not text or text == opening or m.get("r") not in ("u", "c") or text == NEXT_NIGHT:
+                continue  # 「[다음 밤]」은 빼서 앞뒤 서아 말이 이어지게(절대 규칙 15: 그 사이 시간이 흘렀을 수 있다)
             msgs.append({"role": "user" if m["r"] == "u" else "assistant", "content": text})
         messages = self._merge_same_role(
             self._to_llm_messages(msgs) + [{"role": "user", "content": user_message.strip()}]
@@ -455,6 +478,8 @@ class Engine:
                     out["location"] = EVENT_LOCATIONS[event]
                 if event == "CRISIS" and not state["episode"]:  # S4: 위기 장소는 갈래로 정함
                     out["location"] = CRISIS_LOCATIONS[state["route"] or "care"]
+                if night:  # S4-C: 다음 밤은 바 1층에서
+                    out["location"] = NIGHT_LOCATION
                 if pose_id:  # 포즈 부탁: 앱이 그 몸짓을 고정 재생하므로 답장도 같은 몸짓으로
                     out["motion_id"] = pose_id
                 return out
@@ -571,10 +596,21 @@ class Engine:
         """판정 호출 → 규칙 적용 → 다음 턴 사건 결정. 갱신된 state를 돌려준다."""
         state = normalize_state(state)
         stage_before = state["stage"]
-        judge = self._judge(state, last_user, last_reply, need_summary, recent or [])
+        lines = [m.strip() for m in (last_user or "").split("\n") if m.strip()]
+        msgs = [m for m in lines if m != NEXT_NIGHT]  # S4-C: 「[다음 밤]」은 유저의 말이 아님
+        next_night = len(msgs) < len(lines) and not state["episode"]
+        real_user = "\n".join(msgs)
+        if next_night and not msgs and not need_summary:  # 판정할 말이 없음: 호출하지 않음
+            judge = {"affection_delta": 0, "flags": [], "time_advance": False, "time_of_day": "", "summary": "",
+                     "stage_note": "", "promise": "", "reason": "다음 밤"}
+        else:
+            judge = self._judge(state, real_user if next_night else last_user, last_reply, need_summary, recent or [])
+        if next_night:  # 날짜는 밤 넘기기가 정함. 「[다음 밤]」만 왔으면 호감·플래그 0
+            judge.update(time_advance=False, time_of_day="")
+            if not msgs:
+                judge.update(affection_delta=0, flags=[], promise="")
         progress = None
         if not state["episode"]:  # 대화량 점수·메시지 수는 본 이야기만
-            msgs = [m.strip() for m in (last_user or "").split("\n") if m.strip()]
             state["name_quiet"] = max(0, min(NAME_QUIET_MSGS, state["name_quiet"]) - len(msgs))
             judge["talk_bonus"] = max(0, min(self._talk_bonus(msgs, judge), TALK_BONUS_STAGE_MAX - state["stage_bonus"]))
             state["stage_user_msgs"] += len(msgs)
@@ -583,6 +619,13 @@ class Engine:
             self._tick_scene(state)  # S4: 단계 조건이 갈래 장면을 「마침」을 보므로 단계 판단보다 먼저
         changes = [] if state["episode"] else self._remember(state, judge)
         changes += self._apply(state, judge, None, last_reply)
+        if not state["episode"] and state["night_next"]:  # S4-C 밤 넘기기
+            if next_night:
+                self._next_night(state, changes)
+            else:
+                state["night_wait"] += len(msgs)
+                if state["night_wait"] >= NIGHT_WAIT_MAX:
+                    self._next_night(state, changes, f"「{NEXT_NIGHT}」 없이 메시지 {state['night_wait']}개")
         if not state["episode"] and stage_before == 5:
             self._crisis(state, judge, last_reply, len(msgs), changes)
         if not state["episode"] and state["stage"] != stage_before:
@@ -605,8 +648,10 @@ class Engine:
                 self._start_route_scene(state, route_event, changes)
             if stage_before == 6:  # 6단계: 첫 아침 → 그 갈래 조연 마무리 → stayed (오른 판정은 STAGE_UP_6 차례)
                 self._side_finale(state, last_reply, judge, changes)
+            if state["stage"] == stage_before:
+                self._night_end(state, changes)
         # 에피소드 중에는 앱이 단계·장면을 정하므로 사건 계산을 건너뛴다 (단계 상승은 _apply에서 건너뜀)
-        nxt_event = None if state["episode"] else self._tick_events(state, last_user)
+        nxt_event = None if state["episode"] else self._tick_events(state, real_user if next_night else last_user)
         if nxt_event:
             changes.append(f"다음 턴 사건: {nxt_event}")
         if not state["episode"] and state["stage"] == stage_before:
@@ -700,7 +745,10 @@ class Engine:
             parts.append(self.blocks[f"ROUTE_MORNING_{state['route'].upper()}"])  # 첫 아침이 나오면 다시 넣지 않음
         if event in ("MARI", "TAEO"):  # 예전 값: 차례로 고름
             event = f"{event}_{max(1, min(3, state[event.lower() + '_step']))}"
-        if event and f"EVENT_{event}" in self.blocks:  # 이번 답장의 사건(시작 턴)
+        night = self._night_block(state, event)
+        if night:  # S4-C: 밤 마무리(NIGHT_END) 또는 「[다음 밤]」 첫마디. 이 답장에는 갈래 장면을 잇지 않음
+            parts.append(self.blocks[night])
+        elif event and f"EVENT_{event}" in self.blocks:  # 이번 답장의 사건(시작 턴)
             parts.append(render(self.blocks[f"EVENT_{event}"], values))  # NAME_FORGIVEN 은 {{user_name}}
         elif event and event.startswith("STAGE_UP_") and event in self.blocks:
             block = self._stage_up_block(state, event)
@@ -724,6 +772,18 @@ class Engine:
         picked = [line.split("] ", 1)[1] for line in lines if line.startswith(f"[{key}] ")]
         head = [line for line in lines if not line.startswith("[")]
         return render("\n".join(head + picked), values)
+
+    @staticmethod
+    def _night_block(state: dict, event: str | None) -> str | None:
+        """S4-C: 「[다음 밤]」이면 night_next 첫마디 블록, NIGHT_END 면 night_next 에 맞는 마무리 블록."""
+        if state.get("_night"):
+            return state["_night"]
+        if event != "NIGHT_END" or state.get("episode"):
+            return None
+        nxt = state.get("night_next")
+        if nxt in NIGHT_NEXT and NIGHT_NEXT[nxt][2]:
+            return NIGHT_NEXT[nxt][2]
+        return "NIGHT_END_1" if state["stage"] <= 2 else f"NIGHT_END_{(state.get('route') or 'care').upper()}"
 
     def _crisis_parts(self, state: dict, event: str | None) -> list[str]:
         """S4-B: 위기 장면(CRISIS_갈래, 시작 답장과 위기 중) + CRISIS_WATCH(갈래 줄만) · 엇갈림 RIFT + RECONCILE_WATCH ·
@@ -797,6 +857,8 @@ class Engine:
             return None
         if stage == 2 and "outside" in state["stage_flags"]:
             return None  # 유저가 먼저 바 밖으로 나갔으면 그 장면으로 이어 감
+        if stage in NIGHT_END_STAGES and (f"NIGHT_END_{stage}" not in state["used_events"] or state["night_next"]):
+            return None  # S4-C: 2·3단계 갈래 장면은 밤을 넘긴 다음 밤에
         return event
 
     def _crisis(self, state: dict, judge: dict, last_reply: str, n_msgs: int, changes: list[str]) -> None:
@@ -817,6 +879,7 @@ class Engine:
                 state["pending_event"], state["rewind_offer"] = "RIFT_START", True
                 state["stage_hints"], state["hint_msgs"], state["hint_due"] = 0, 0, None
                 state["used_events"]["RIFT_START"] = turn
+                self._set_night(state, "RIFT_NIGHT")  # RIFT_START 가 그 밤의 마무리: 한 번 답한 뒤 「며칠 뒤 밤」
                 changes.append(f"엇갈림: 위기 메시지 {CRISIS_MAX_MSGS}개 동안 마음 확인 없음 → 호감 {RIFT_AFFECTION}")
             elif state["crisis_msgs"] >= CRISIS_HINT_MSGS and not state["stage_hints"]:
                 self._set_hint(state, "HINT_5", state["crisis_msgs"], changes)
@@ -839,8 +902,42 @@ class Engine:
 
     @staticmethod
     def _rift_night_started(state: dict) -> bool:
-        """엇갈림의 메시지는 「며칠 뒤 밤」부터 셈 (S4-C 에서 밤 넘기기와 이어짐)."""
-        return True
+        """엇갈림의 메시지는 「며칠 뒤 밤」부터 셈 (RIFT_START 뒤 한 번 답할 기회·시간 카드가 지난 뒤)."""
+        return not state["night_next"]
+
+    # ---------- 밤 넘기기 (S4-C) ----------
+    @staticmethod
+    def _set_night(state: dict, nxt: str) -> None:
+        state["night_next"], state["night_card"], state["night_wait"] = nxt, NIGHT_NEXT[nxt][0], 0
+
+    @classmethod
+    def _night_end(cls, state: dict, changes: list[str]) -> None:
+        """1→2, 2→3 로 오른 뒤(상징 장면 다음부터) 유저 메시지 4개가 지나면 다음 답장에 그 밤의 마무리(NIGHT_END) 한 번."""
+        st = state["stage"]
+        if st not in NIGHT_END_STAGES or state["night_next"] or state["pending_event"] or state["ending"]:
+            return
+        if f"NIGHT_END_{st}" in state["used_events"] or state["stage_user_msgs"] < NIGHT_END_AFTER:
+            return
+        if cls._name_scene_quiet(state):
+            return  # 이름 장면 중에는 미룸
+        nxt = "NIGHT_START_2" if st == 2 else f"NIGHT_START_3_{(state['route'] or 'care').upper()}"
+        state["pending_event"] = "NIGHT_END"
+        state["used_events"][f"NIGHT_END_{st}"] = state["turn"]
+        cls._set_night(state, nxt)
+        changes.append(f"밤 마무리: NIGHT_END → 다음 밤 {nxt} ({state['night_card']})")
+
+    @staticmethod
+    def _next_night(state: dict, changes: list[str], why: str = NEXT_NIGHT) -> None:
+        """「[다음 밤]」: 날짜·시간대·장소를 다음 밤으로, 열려 있던 갈래 장면은 닫음. 엇갈림은 이 밤부터 메시지를 셈."""
+        nxt = state["night_next"]
+        state["day"] += NIGHT_NEXT[nxt][1]
+        state["time_of_day"], state["location"] = "밤", NIGHT_LOCATION
+        state["night_next"], state["night_card"], state["night_wait"] = None, None, 0
+        if state["scene"]:
+            state["scene"], state["scene_judges_left"] = None, 0
+        if state["crisis"] == "rift":
+            state["crisis_msgs"] = 0
+        changes.append(f"다음 밤 ({why}): {state['day']}일째 밤, {nxt}")
 
     def _won(self, state: dict, won: str, shown: str, changes: list[str], why: str) -> None:
         """마음 확인 → 6단계. 성공 대사가 판정한 답장에 없었으면 다음 답장(STAGE_UP_6) 앞에 넣음."""
@@ -851,7 +948,7 @@ class Engine:
 
     @staticmethod
     def _set_hint(state: dict, name: str, msgs: int, changes: list[str]) -> None:
-        if state["pending_event"]:
+        if state["pending_event"] or state["night_next"]:
             return  # 사건이 있는 답장에는 넣지 않음 → 다음 판정에서 다시 봄
         state["hint_due"], state["hint_msgs"] = name, msgs
         state["stage_hints"] += 1
@@ -863,7 +960,8 @@ class Engine:
         사건이 정해졌거나 갈래 장면이 열려 있거나 이름 장면 중이면 다음 판정으로 미룸."""
         st, msgs = state["stage"], state["stage_user_msgs"]
         name = HINT_OF_STAGE.get(st)
-        if not name or state["ending"] or state["pending_event"] or state["scene"] or cls._name_scene_quiet(state):
+        if (not name or state["ending"] or state["pending_event"] or state["scene"] or state["night_next"]
+                or cls._name_scene_quiet(state)):
             return
         if msgs < MIN_STAGE_MSGS.get(st, 0) or state["stage_hints"] >= HINT_MAX:
             return
@@ -894,8 +992,8 @@ class Engine:
         else:
             state["short_streak"] = 0
 
-        if state["pending_event"] or state["ending"] == "departed":
-            return None  # 이미 예약된 사건(DEPARTURE 등)이 있거나 실패 엔딩 뒤.
+        if state["pending_event"] or state["ending"] == "departed" or state["night_next"]:
+            return None  # 이미 예약된 사건이 있거나(예전) 실패 엔딩 뒤, 또는 밤 마무리 중(S4-C, 한 번 답하는 답장에도 사건 없음)
         if self._name_scene_quiet(state):
             return None  # S2-1: 이름 장면 중·직후에는 무작위 사건(조연 포함)을 끼우지 않음 stayed 뒤에는 연인 일상 사건이 이어짐
         if state["stage"] == 6 and state["route"] and state["ending"] != "stayed":

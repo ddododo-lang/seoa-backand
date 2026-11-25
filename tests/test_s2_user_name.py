@@ -236,6 +236,14 @@ class XmasTest(unittest.TestCase):
         self.assertIn(boss, e.blocks["MAIN_WORLD"])
         self.assertIn("…이번 한 번만 넘어가 줄게. {{user_name}}.", e.blocks["EVENT_NAME_FORGIVEN"])  # 원고 그대로
 
+    def test_no_name_form_when_not_calling(self):  # S2-4
+        line = ("- 현재 상태의 「이름 부르기」가 아직 안 부름·거절당함·다시는 부르지 않음이면, "
+                "「○○ 씨」「○○야」를 포함해 이름을 어떤 꼴로도 쓰지 않는다. 대사와 지문 모두.")
+        main = system_for({"stage": 2, "user_name": "바다"})
+        self.assertIn(line, main)
+        self.assertIn("- 이름 부르기: 아직 안 부름", main)
+        self.assertLess(main.index(line), main.index("- 이름을 부를 때는 평소엔 「○○ 씨」"))  # 「○○ 씨」 줄 바로 앞
+
     def test_no_refusal_in_episode(self):
         llm = Stub(["refuse_name"])
         st = engine(llm).judge(dict(self.XMAS, name_state="accepted"), "…", "…")["state"]

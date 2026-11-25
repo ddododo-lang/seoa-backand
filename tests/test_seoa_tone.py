@@ -53,6 +53,22 @@ class StormTest(unittest.TestCase):  # 2
         self.assertIn("소파에서 잘게", system_for({"stage": 3, "pending_event": "STORM"}))
 
 
+class StormLocationTest(unittest.TestCase):  # 2 (eval: 모델이 location 을 빠뜨려 앱 배경이 1층에 남음)
+    def reply(self, location, pending="STORM"):
+        llm = JudgeStub({})
+        llm.chat_json = lambda *a, **k: json.dumps({"action": "수건을 받는다.", "dialogue": "…소파에서 잘게.",
+                                                    "motion_id": None, "emotion": "평온", "location": location},
+                                                   ensure_ascii=False)
+        return engine(llm).reply({"stage": 3, "pending_event": pending}, "(수건을 건넨다)", [], [])
+
+    def test_storm_reply_moves_to_second_floor(self):
+        self.assertEqual(self.reply(None)["location"], SECOND_FLOOR)
+
+    def test_model_location_kept_and_other_events_untouched(self):
+        self.assertEqual(self.reply("바 옥상")["location"], "바 옥상")
+        self.assertIsNone(self.reply(None, pending="MARI")["location"])
+
+
 class StageUpSceneTest(unittest.TestCase):  # 3
     LINES = {2: "…생각보다 괜찮네. 사장님 손.", 3: "알아. 문 닫은 거. …한 잔만 더.",
              4: "…너 이름, 아직 안 물어봤네.", 6: "매일 온 거, 술 때문 아니었어."}

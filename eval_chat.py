@@ -244,6 +244,12 @@ CHECK_PROMPTS = {  # 모델에게 묻는 확인 (문자열만으로는 못 가�
 }
 
 
+def count_bits(text: str | None) -> int:
+    """대사 마디(문장) 수. 문장 끝(. ? !)으로 센다. 문장 가운데 「…」(예: 「시끄럽고… 잘 보여서.」)는 끊지 않는다."""
+    parts = re.split(r"(?<=[.?!。])\s+", (text or "").strip())
+    return len([x for x in parts if x.strip(" .…?!")])
+
+
 def model_check(llm, kind: str, user: str, text: str) -> dict | None:
     try:
         raw = llm.complete(CHECK_SYSTEM, CHECK_PROMPTS[kind].format(user=user, text=text), json_mode=True)
@@ -287,7 +293,7 @@ def run_scenarios(which: str, pause: float = 0) -> None:
             sec = time.time() - t0
             text = to_text(reply)
             dialogue = reply["dialogue"]
-            split = lambda t: len([x for x in re.split(r"[.?!…。]+\s*", t or "") if x.strip()])  # noqa: E731
+            split = lambda t: count_bits(t)  # noqa: E731
             sentences, action_n = split(dialogue), split(reply["action"])
             checks = [f"대사 {'❌ ' if sentences > 2 else ''}{len(dialogue)}자·{sentences}마디",
                       f"지문 {'❌ ' if action_n > 2 else ''}{action_n}문장"]

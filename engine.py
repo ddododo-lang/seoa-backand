@@ -52,6 +52,7 @@ SHORT_MESSAGE_LEN = 20      # 이보다 짧은 유저 메시지는 '짧은 답'
 SHORT_STREAK_TRIGGER = 3    # 짧은 답이 이만큼 연속되면 사건 발동
 QUIET_TURNS_TRIGGER = 15    # 사건 없이 이만큼 지나면 사건 발동
 EVENT_COOLDOWN = 20         # 같은 사건을 다시 쓰기까지 필요한 턴 수
+EVENT_LOCATIONS = {"STORM": "바 '라스트 오더' 2층"}  # 이 사건이 나온 답장은 이 장소로 옮김 (앱 배경 전환)
 STAGE_UP_SCENES = {2, 3, 4, 6}  # 단계가 오른 다음 답장에 한 번 넣는 상징 장면(STAGE_UP_n). 5는 DEPARTURE
 DEPARTURE_DAYS = 7          # 5단계 출발까지 남은 날
 SUMMARY_TRIGGER = 40        # 요약 안 된 메시지가 이만큼 쌓이면 요약
@@ -224,6 +225,8 @@ class Engine:
             data = self._parse_json(raw)
             if data and str(data.get("dialogue") or "").strip():
                 out = self._validate_reply(data, ids, allowed_locations(state))
+                if not out["location"] and event in EVENT_LOCATIONS:  # 장소를 옮기는 사건인데 모델이 빠뜨리면 서버가 채움
+                    out["location"] = EVENT_LOCATIONS[event]
                 if pose_id:  # 포즈 부탁: 앱이 그 몸짓을 고정 재생하므로 답장도 같은 몸짓으로
                     out["motion_id"] = pose_id
                 return out

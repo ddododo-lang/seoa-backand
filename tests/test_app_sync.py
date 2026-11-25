@@ -128,6 +128,13 @@ class GiftTest(unittest.TestCase):  # 13 (앱 49·50)
         judge = e = engine().blocks["JUDGE_SYSTEM"]
         self.assertIn("「서아 기분에 맞는 선물」 또는 「순간 선물」이 붙으면: flags에 \"care\", affection_delta +6 ~ +10", judge)
         self.assertIn("「또」가 붙으면", e)
+        self.assertIn("affection_delta +1 ~ +4, care는 넣지 않는다", e)
+
+    def test_examples_follow_length_rule(self):
+        import re
+        base = engine().blocks["BASE_SYSTEM"]
+        for d in re.findall(r'"dialogue": "([^"]+)"', base):
+            self.assertLessEqual(len([x for x in re.split(r"[.?!…]+\s*", d) if x.strip()]), 2, d)
 
 
 class HoldTest(unittest.TestCase):  # 10·11

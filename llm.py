@@ -23,7 +23,7 @@ import re
 import time
 from collections import Counter
 
-FALLBACK_REPLY = "*서아가 잠시 말없이 잔 테두리를 손끝으로 훑는다.* …방금 뭐라고 했어, 사장님. 다시 말해 봐."
+FALLBACK_REPLY = "*서아가 잔 테두리를 손끝으로 훑는다.* …다시 말해 봐."  # 앱 원고 32 6절과 같은 문장
 
 def _env_float(names: tuple[str, ...], default: float) -> float:
     for name in names:

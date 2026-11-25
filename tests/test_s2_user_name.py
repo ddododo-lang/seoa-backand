@@ -221,6 +221,21 @@ class XmasTest(unittest.TestCase):
         self.assertIn("- 이름 부르기: 진지한 순간에 이름", s)
         self.assertIn('이름을 부를 수 있을 때도 진지한 순간에만 이름을 부르고, 평소에는 "사장님"이다.', s)
 
+    def test_name_call_style_and_boss_line(self):  # S2-3
+        style = "- 이름을 부를 때는 평소엔 「○○ 씨」라고 부르고 말은 반말 그대로 한다(예: 「○○ 씨, 그건 아니지.」)."
+        boss = '- 유저를 "사장님"이라고 놀리듯 부른다.'
+        xmas = system_for(self.XMAS)
+        main = system_for({"stage": 3, "user_name": "도윤", "name_state": "accepted"})
+        for s in (xmas, main):
+            self.assertIn(style, s)
+            self.assertIn("「○○님」은 쓰지 않는다.", s)
+        self.assertNotIn("놀리듯 부른다", xmas)
+        self.assertIn(boss, main)
+        e = engine()
+        self.assertNotIn(boss, e.blocks["BASE_SYSTEM"])
+        self.assertIn(boss, e.blocks["MAIN_WORLD"])
+        self.assertIn("…이번 한 번만 넘어가 줄게. {{user_name}}.", e.blocks["EVENT_NAME_FORGIVEN"])  # 원고 그대로
+
     def test_no_refusal_in_episode(self):
         llm = Stub(["refuse_name"])
         st = engine(llm).judge(dict(self.XMAS, name_state="accepted"), "…", "…")["state"]

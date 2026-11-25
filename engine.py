@@ -98,13 +98,9 @@ ROUTE_EVENT_AFFECTION = {2: 40, 3: 55, 4: 65}
 ROUTE_SCENES = {"DATE", "WALK_HOME", "STORM", "ROOFTOP", "ALLEY"}
 SCENE_JUDGES = 2  # 갈래 장면이 시작된 뒤 판정 몇 번(≈ 3턴씩) 동안 장면 블록을 계속 넣을지
 STAGE_UP_SCENES = {2, 3, 4, 6}  # 단계가 오른 다음 답장에 한 번 넣는 상징 장면(STAGE_UP_n). 5는 DEPARTURE
-# 대화량 보조 점수 (판정 코드에서 계산, 모델에 맡기지 않음)
-TALK_LONG = 40             # 이 글자 수(공백 뺌) 이상이면 긴 메시지
-TALK_MAX_COUNT = 150       # 메시지 하나는 이 글자 수까지만 셈
-TALK_BONUS_FLAGS = {"care", "sincere", "comfort", "tease"}
+# 대화량 보조 점수: S3 에서 없앰(언제나 0). 필드는 앱 호환을 위해 남김
 TALK_BONUS_STAGE_MAX = 8   # 단계마다 보너스 합계 상한(단계가 오르면 0부터)
 MIN_STAGE_MSGS = {2: 15, 3: 20, 4: 15}  # 그 단계에서 이만큼 유저 메시지를 보내야 다음 단계로(1→2·5→6 없음)
-NOT_TALK = re.compile(r"[\sㅋㅎㅠㅜㄷㄱ~!?.,…·\-_^*()\[\]<>:;'\"0-9]+")  # 이것만 있으면 「글」이 아님(이모지는 따로 뺌)
 GIFT_MOMENT_GAP = 10       # 같은 순간 선물은 준 뒤 유저 메시지 이만큼 지나야 다시 엶
 FIRST_NIGHT_TURNS = 3     # 첫날 밤 사정(손등의 피)은 유저 메시지 이만큼까지만 넣음. 그 뒤엔 같은 묘사가 반복되지 않게 뺌
 GIFT_MOMENT_QUIET = 3      # 순간 선물을 준 뒤 이만큼은 어떤 순간 선물도 열지 않음(자주 넣지 않기)
@@ -505,7 +501,7 @@ class Engine:
         if not state["episode"]:  # 대화량 점수·메시지 수는 본 이야기만
             msgs = [m.strip() for m in (last_user or "").split("\n") if m.strip()]
             state["name_quiet"] = max(0, min(NAME_QUIET_MSGS, state["name_quiet"]) - len(msgs))
-            judge["talk_bonus"] = min(self._talk_bonus(msgs, judge), TALK_BONUS_STAGE_MAX - state["stage_bonus"])
+            judge["talk_bonus"] = max(0, min(self._talk_bonus(msgs, judge), TALK_BONUS_STAGE_MAX - state["stage_bonus"]))
             state["stage_user_msgs"] += len(msgs)
         changes = [] if state["episode"] else self._remember(state, judge)
         changes += self._apply(state, judge, None, last_reply)
@@ -672,23 +668,9 @@ class Engine:
     # ---------- 사건 ----------
     @staticmethod
     def _talk_bonus(msgs: list[str], judge: dict) -> int:
-        """판정 한 번(최대 3턴)의 유저 메시지 글자 수로 주는 보너스. 짧은 메시지에 감점은 없음."""
-        if judge["affection_delta"] < 0:
-            return 0
-        seen, lengths = set(), []
-        for m in msgs:
-            text = re.sub(r"\s+", " ", m).strip()
-            key = re.sub(r"\s+", "", text)
-            plain = "".join(ch for ch in NOT_TALK.sub("", text) if ord(ch) < 0x2600 or 0xAC00 <= ord(ch) <= 0xD7A3)
-            if (text.startswith("[유저가 선물함:") or POSE_REQUEST.match(text) or not plain or key in seen):
-                lengths.append(0)  # 선물 줄·포즈 부탁·ㅋㅎ·기호·이모지만·같은 말 반복은 글자 수에서 뺌
-            else:
-                lengths.append(min(len(key), TALK_MAX_COUNT))
-            seen.add(key)
-        long_n = sum(n >= TALK_LONG for n in lengths)
-        if len(msgs) >= 3 and long_n == len(msgs) and TALK_BONUS_FLAGS & set(judge["flags"]):
-            return 2
-        return 1 if long_n >= 2 else 0
+        """S3: 메시지 길이 보너스를 없앰. 언제나 0.
+        talk_bonus·stage_bonus 필드는 앱 호환을 위해 그대로 두고 값만 0 (예전 계산은 git 기록 [S3-B] 이전)."""
+        return 0
 
     @staticmethod
     def _tick_scene(state: dict) -> None:

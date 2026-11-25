@@ -203,5 +203,30 @@ class MemoryTest(unittest.TestCase):  # B5
         self.assertIn('"stage_note": "", "promise": ""', judge_system)
 
 
+
+class JudgeBalanceTest(unittest.TestCase):  # C4
+    def test_new_criteria(self):
+        j = engine().blocks["JUDGE_SYSTEM"]
+        for text in (
+            "- +1 ~ +4: 가벼운 다정함, 재치 있는 받아치기, 농담, 서아의 말에 성의 있게 반응함. 짧은 메시지도 상황에 맞으면 같게 본다.",
+            "- 0: 인사, 성의 없는 맞장구, 스토리와 무관한 대화",
+            '- "care": 실제로 챙기는 행동이나 말(치료, 물·담요·음식 챙기기, 취향 기억, 몸 상태 걱정). 그냥 친절한 말투는 care 가 아니다.',
+            '- "tease": 서아의 도발을 맞받아치기, 거꾸로 놀리기, 능청, 농담, 밀당하는 말. 다정함과 장난이 같이 있으면 둘 다 넣는다.',
+        ):
+            self.assertIn(text, j)
+        for old in ("대화를 이어감", "중립적이거나 스토리와 무관한 대화", '"care": 상처 치료, 챙김, 취향 기억',
+                    "재치 있게 맞받아치거나 거꾸로 서아를 놀림"):
+            self.assertNotIn(old, j)
+
+    def test_talk_bonus_always_zero(self):
+        long_msgs = ["오늘은 일부러 일찍 문 열었어. 네가 비 맞고 올까 봐 수건도 데워 놨고, 늘 마시던 거 미리 준비해 뒀어."] * 3
+        self.assertEqual(Engine._talk_bonus(long_msgs, {"affection_delta": 5, "flags": ["care", "tease"]}), 0)
+        r = engine(JudgeStub({"affection_delta": 3, "flags": ["care"]})).judge(
+            {"stage": 2, "affection": 20}, "\n".join(long_msgs), "…그래.")
+        self.assertEqual((r["judge"]["talk_bonus"], r["progress"]["talk_bonus"], r["state"]["stage_bonus"]), (0, 0, 0))
+        self.assertEqual(r["state"]["affection"], 23)
+        self.assertIn("stage_bonus_max", r["progress"])  # 앱 호환: 필드는 그대로
+
+
 if __name__ == "__main__":
     unittest.main()

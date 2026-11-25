@@ -1,4 +1,5 @@
 """S3 대화 품질 키 없는 테스트. 실행: python -m unittest discover -s tests -v"""
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -6,6 +7,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
+import engine as engine_mod  # noqa: E402
 from db import Store  # noqa: E402
 from engine import Engine, normalize_state  # noqa: E402
 from llm import FakeLLM  # noqa: E402
@@ -61,6 +63,19 @@ PLACE_RULES = [
 ]
 
 
+class SpyLLM(FakeLLM):
+    """대화 호출을 남기고 정해 둔 답장을 돌려줌."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    def chat_json(self, system, messages, schema, budget_sec=None):
+        self.calls.append({"system": system, "messages": messages})
+        return json.dumps({"action": "x", "dialogue": "응.", "motion_id": None, "emotion": "평온",
+                           "location": None}, ensure_ascii=False)
+
+
 def engine(llm=None):
     return Engine(llm=llm or FakeLLM(), store=Store(":memory:"), prompt_path=PROMPT)
 
@@ -103,6 +118,89 @@ class DialogueRulesTest(unittest.TestCase):  # A9
         self.assertIn("아래 [말투]의 대표 대사와 [예시]의 문장은 말투 참고용이며 그대로 쓰지 않는다.", s)
         self.assertIn("키스는 하지 않는다.", s)  # STAGE_4 그대로
         self.assertIn("기본 반말. 짧고 나른한 문장.", s)
+
+
+class JudgeStub(FakeLLM):
+    """판정 JSON을 차례로 돌려주고, 받은 판정 요청을 남기는 LLM."""
+
+    def __init__(self, *verdicts):
+        super().__init__()
+        self.verdicts, self.prompts = list(verdicts), []
+
+    def complete(self, system, prompt, json_mode=False, budget_sec=None):
+        if not json_mode:
+            return super().complete(system, prompt)
+        self.prompts.append(prompt)
+        v = self.verdicts.pop(0) if len(self.verdicts) > 1 else self.verdicts[0]
+        return json.dumps({"affection_delta": 0, "flags": [], **v}, ensure_ascii=False)
+
+
+class MemoryTest(unittest.TestCase):  # B5
+    def test_history_80(self):
+        self.assertEqual(engine_mod.HISTORY_MESSAGES, 80)
+        llm = SpyLLM()
+        history = [{"r": "u" if i % 2 == 0 else "c", "t": f"줄{i}"} for i in range(100)]
+        engine(llm).reply({"stage": 2, "day": 3}, "지금", history, MOTIONS)
+        sent = "\n".join(m["content"] for m in llm.calls[0]["messages"])
+        self.assertIn("줄20\n", sent + "\n")
+        self.assertNotIn("줄19\n", sent + "\n")
+
+    def test_stage_note_requested_after_stage_up_and_saved(self):
+        llm = JudgeStub({"affection_delta": 5, "flags": ["care"]},
+                        {"stage_note": "서아가 손등 상처를 맡겼다."})
+        e = engine(llm)
+        r = e.judge({"stage": 1, "affection": 9}, "치료해 줄게", "…알아서 해.")
+        st = r["state"]
+        self.assertEqual((st["stage"], st["stage_note_due"]), (2, 1))
+        self.assertNotIn("[단계 기록 요청]", llm.prompts[0])
+        r = e.judge(st, "또 와", "…봐서.")
+        self.assertIn("[단계 기록 요청] 1단계(경계)를 한 문장으로", llm.prompts[1])
+        st = r["state"]
+        self.assertEqual(st["stage_notes"], {"1": "서아가 손등 상처를 맡겼다."})
+        self.assertIsNone(st["stage_note_due"])
+        self.assertIn("- 지난 단계 기록:\n  - 1단계(경계): 서아가 손등 상처를 맡겼다.", system(st))
+        st["summary"] = "새 요약"  # 요약이 바뀌어도 지우지 않음
+        self.assertEqual(normalize_state(st)["stage_notes"]["1"], "서아가 손등 상처를 맡겼다.")
+
+    def test_note_without_request_is_ignored_and_overwrite(self):
+        llm = JudgeStub({"stage_note": "요청 없는 기록"})
+        r = engine(llm).judge({"stage": 2, "affection": 20}, "안녕", "…응.")
+        self.assertEqual(r["state"]["stage_notes"], {})
+        self.assertEqual(r["judge"]["stage_note"], "")
+        llm = JudgeStub({"stage_note": "새 기록"})
+        r = engine(llm).judge({"stage": 3, "affection": 45, "stage_note_due": 2,
+                               "stage_notes": {"2": "옛 기록"}}, "응", "…그래.")
+        self.assertEqual(r["state"]["stage_notes"], {"2": "새 기록"})
+
+    def test_empty_blocks_say_none(self):
+        s = system({"stage": 2})
+        self.assertIn("- 지난 단계 기록:\n  - 없음", s)
+        self.assertIn("- 서아가 한 말·약속 (부정하지 말 것):\n  - 없음", s)
+
+    def test_promises_keep_last_five(self):
+        st = {"stage": 2, "affection": 20}
+        for i in range(7):
+            st = engine(JudgeStub({"promise": f"약속{i}"})).judge(st, "응", "…그래.")["state"]
+        self.assertEqual(st["promises"], [f"약속{i}" for i in range(2, 7)])
+        s = system(st)
+        self.assertIn("- 서아가 한 말·약속 (부정하지 말 것):\n  - 약속2\n", s)
+        self.assertIn("  - 약속6", s)
+        self.assertNotIn("약속1", s)
+
+    def test_xmas_has_no_memory_lines(self):
+        st = dict(XMAS, stage_notes={"1": "기록"}, promises=["약속"], stage_note_due=2)
+        s = system(st)
+        self.assertNotIn("지난 단계 기록", s)
+        self.assertNotIn("서아가 한 말·약속", s)
+        llm = JudgeStub({"promise": "새 약속", "stage_note": "x"})
+        r = engine(llm).judge(st, "응", "…그래.")
+        self.assertNotIn("[단계 기록 요청]", llm.prompts[0])
+        self.assertEqual(r["state"]["promises"], ["약속"])
+
+    def test_judge_system_fields(self):
+        judge_system = engine().blocks["JUDGE_SYSTEM"]
+        self.assertIn("서아가 직접 한 제안·약속·발언과 유저의 고백·약속을 가장 먼저 남긴다.", judge_system)
+        self.assertIn('"stage_note": "", "promise": ""', judge_system)
 
 
 if __name__ == "__main__":

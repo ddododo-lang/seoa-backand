@@ -30,6 +30,7 @@ STAGE_EVENTS = {
 ALLOWED_FLAGS = {"care", "protect", "outside", "sincere", "pursue", "tease", "comfort", "reveal_secret1"}
 LOCATIONS = ["바 '라스트 오더' 1층", "바 '라스트 오더' 2층", "네온 골목", "비 내리는 골목", "바 옥상"]
 EMOTIONS = {"평온", "기쁨", "도발", "장난", "진심", "설렘", "수줍음", "놀람", "슬픔", "분노", "질투", "당황"}
+POSE_REQUEST = re.compile(r"^\s*(.+?)\s*해\s*줄래\s*\??\s*$")  # 앱 48 포즈 부탁 문장
 HISTORY_MESSAGES = 32       # 대화 호출에 넣을 최근 기록 (16턴 = 유저 16 + 서아 16)
 FALLBACK = {"action": None, "dialogue": "…", "motion_id": None, "emotion": "평온", "location": None}
 REPLY_SCHEMA = {  # Gemini 응답 스키마 (OUTPUT_FORMAT과 같은 모양)
@@ -178,9 +179,12 @@ class Engine:
             if not text or text == opening or m.get("r") not in ("u", "c"):
                 continue
             msgs.append({"role": "user" if m["r"] == "u" else "assistant", "content": text})
-        messages = self._to_llm_messages(msgs) + [{"role": "user", "content": user_message.strip()}]
+        messages = self._merge_same_role(
+            self._to_llm_messages(msgs) + [{"role": "user", "content": user_message.strip()}]
+        )
 
         ids = {str(m.get("id")) for m in motion_list if isinstance(m, dict)}
+        pose_id = self._pose_request(user_message, motion_list)
         start = time.monotonic()
         for _ in range(2):  # 파싱 실패하면 1번 더 (두 번 합쳐 BUDGET_SEC 안에서)
             remaining = BUDGET_SEC - (time.monotonic() - start)
@@ -192,8 +196,34 @@ class Engine:
                 break
             data = self._parse_json(raw)
             if data and str(data.get("dialogue") or "").strip():
-                return self._validate_reply(data, ids)
+                out = self._validate_reply(data, ids)
+                if pose_id:  # 포즈 부탁: 앱이 그 몸짓을 고정 재생하므로 답장도 같은 몸짓으로
+                    out["motion_id"] = pose_id
+                return out
         return dict(FALLBACK)
+
+    @staticmethod
+    def _merge_same_role(messages: list[dict]) -> list[dict]:
+        """앱이 서아 쪽 줄을 연달아 넣을 수 있어서(셀카 메모, 다시 들어올 때 인사) 같은 역할이 이어지면 한 메시지로 합친다."""
+        merged: list[dict] = []
+        for m in messages:
+            if merged and merged[-1]["role"] == m["role"]:
+                merged[-1] = {"role": m["role"], "content": merged[-1]["content"] + "\n" + m["content"]}
+            else:
+                merged.append(dict(m))
+        return merged
+
+    @staticmethod
+    def _pose_request(user_message: str, motion_list: list[dict]) -> str | None:
+        """앱 포즈 부탁 「{몸짓 이름} 해 줄래?」(48)이면 그 몸짓 id. 목록에 없는 이름이면 None."""
+        match = POSE_REQUEST.match(user_message or "")
+        if not match:
+            return None
+        name = match.group(1).strip()
+        for m in motion_list:
+            if isinstance(m, dict) and str(m.get("name") or "").strip() == name and m.get("id"):
+                return str(m["id"])
+        return None
 
     @staticmethod
     def _parse_json(raw: str) -> dict | None:

@@ -28,8 +28,13 @@ STAGE_EVENTS = {
     6: ["MARI", "STORM", "DATE", "ROOFTOP", "BLACKOUT", "INJURY", "TAEO"],
 }
 ALLOWED_FLAGS = {"care", "protect", "outside", "sincere", "pursue", "tease", "comfort", "reveal_secret1"}
+# 특별 에피소드(앱 42, server-sync.md): state.episode 로 오고, 본 이야기 단계 지침·사건 대신 블록을 넣는다
+EPISODES = {
+    "s2": {"block": "EPISODE_XMAS", "locations": ["크리스마스 거리", "서아의 자취방"]},
+}
 LOCATIONS = ["바 '라스트 오더' 1층", "바 '라스트 오더' 2층", "네온 골목", "비 내리는 골목", "바 옥상"]
 EMOTIONS = {"평온", "기쁨", "도발", "장난", "진심", "설렘", "수줍음", "놀람", "슬픔", "분노", "질투", "당황"}
+POSE_REQUEST = re.compile(r"^\s*(.+?)\s*해\s*줄래\s*\??\s*$")  # 앱 48 포즈 부탁 문장
 HISTORY_MESSAGES = 32       # 대화 호출에 넣을 최근 기록 (16턴 = 유저 16 + 서아 16)
 FALLBACK = {"action": None, "dialogue": "…", "motion_id": None, "emotion": "평온", "location": None}
 REPLY_SCHEMA = {  # Gemini 응답 스키마 (OUTPUT_FORMAT과 같은 모양)
@@ -77,6 +82,9 @@ def new_state() -> dict:
         "summarized_upto": 0,     # 이 메시지 id까지는 요약에 들어감 (세션 방식에서만 씀)
         "ending": None,           # None | "lovers" | "departed"
         "recent_lines": [],       # 직전 서아 응답 3개 (반복 방지)
+        "episode": None,          # 특별 에피소드 id (앱 42: "s2"). 없으면 본 이야기
+        "episode_stage": None,    # 에피소드만의 단계 1~6 (앱이 정함)
+        "episode_stage_name": "", # 에피소드 단계 이름 (앱 이름)
     }
 
 
@@ -100,8 +108,18 @@ def normalize_state(raw: dict | None) -> dict:
             state[key] = value
     state["stage"] = max(1, min(6, state["stage"]))
     state["affection"] = max(0, min(100, state["affection"]))
-    if state["location"] not in LOCATIONS:
-        state["location"] = LOCATIONS[0]
+    if state["episode"] not in EPISODES:
+        state["episode"] = None
+    if state["episode"]:
+        try:
+            state["episode_stage"] = max(1, min(6, int(state["episode_stage"])))
+        except (TypeError, ValueError):
+            state["episode_stage"] = 1
+        state["episode_stage_name"] = str(state["episode_stage_name"] or "").strip()[:20]
+    else:
+        state["episode_stage"], state["episode_stage_name"] = None, ""
+    if state["location"] not in allowed_locations(state):
+        state["location"] = allowed_locations(state)[0]
     ev = state["pending_event"]
     if isinstance(ev, str):
         ev = ev.removeprefix("EVENT_")
@@ -113,6 +131,12 @@ def normalize_state(raw: dict | None) -> dict:
     if not isinstance(state["used_events"], dict):
         state["used_events"] = {}
     return state
+
+
+def allowed_locations(state: dict) -> list[str]:
+    """에피소드 중이면 그 에피소드의 장소만, 아니면 본 이야기 다섯 곳."""
+    ep = EPISODES.get(state.get("episode") or "")
+    return ep["locations"] if ep else LOCATIONS
 
 
 def to_text(reply: dict) -> str:
@@ -172,15 +196,19 @@ class Engine:
         event = state["pending_event"]
         system = self._build_system(state, event, motion_list)
         opening = self.blocks["OPENING"].strip()
-        msgs = [{"role": "assistant", "content": opening}]  # OPENING은 모델이 만들지 않고 고정
+        # OPENING은 모델이 만들지 않고 고정. 에피소드는 앱이 자기 첫 장면을 기록으로 보내므로 바 오프닝을 넣지 않음
+        msgs = [] if state["episode"] else [{"role": "assistant", "content": opening}]
         for m in history[-HISTORY_MESSAGES:]:
             text = str(m.get("t") or "").strip()
             if not text or text == opening or m.get("r") not in ("u", "c"):
                 continue
             msgs.append({"role": "user" if m["r"] == "u" else "assistant", "content": text})
-        messages = self._to_llm_messages(msgs) + [{"role": "user", "content": user_message.strip()}]
+        messages = self._merge_same_role(
+            self._to_llm_messages(msgs) + [{"role": "user", "content": user_message.strip()}]
+        )
 
         ids = {str(m.get("id")) for m in motion_list if isinstance(m, dict)}
+        pose_id = self._pose_request(user_message, motion_list)
         start = time.monotonic()
         for _ in range(2):  # 파싱 실패하면 1번 더 (두 번 합쳐 BUDGET_SEC 안에서)
             remaining = BUDGET_SEC - (time.monotonic() - start)
@@ -192,8 +220,34 @@ class Engine:
                 break
             data = self._parse_json(raw)
             if data and str(data.get("dialogue") or "").strip():
-                return self._validate_reply(data, ids)
+                out = self._validate_reply(data, ids, allowed_locations(state))
+                if pose_id:  # 포즈 부탁: 앱이 그 몸짓을 고정 재생하므로 답장도 같은 몸짓으로
+                    out["motion_id"] = pose_id
+                return out
         return dict(FALLBACK)
+
+    @staticmethod
+    def _merge_same_role(messages: list[dict]) -> list[dict]:
+        """앱이 서아 쪽 줄을 연달아 넣을 수 있어서(셀카 메모, 다시 들어올 때 인사) 같은 역할이 이어지면 한 메시지로 합친다."""
+        merged: list[dict] = []
+        for m in messages:
+            if merged and merged[-1]["role"] == m["role"]:
+                merged[-1] = {"role": m["role"], "content": merged[-1]["content"] + "\n" + m["content"]}
+            else:
+                merged.append(dict(m))
+        return merged
+
+    @staticmethod
+    def _pose_request(user_message: str, motion_list: list[dict]) -> str | None:
+        """앱 포즈 부탁 「{몸짓 이름} 해 줄래?」(48)이면 그 몸짓 id. 목록에 없는 이름이면 None."""
+        match = POSE_REQUEST.match(user_message or "")
+        if not match:
+            return None
+        name = match.group(1).strip()
+        for m in motion_list:
+            if isinstance(m, dict) and str(m.get("name") or "").strip() == name and m.get("id"):
+                return str(m["id"])
+        return None
 
     @staticmethod
     def _parse_json(raw: str) -> dict | None:
@@ -207,7 +261,7 @@ class Engine:
         return data if isinstance(data, dict) else None
 
     @staticmethod
-    def _validate_reply(data: dict, ids: set[str]) -> dict:
+    def _validate_reply(data: dict, ids: set[str], locations: list[str] | None = None) -> dict:
         def clean(x):
             x = str(x or "").strip().strip("*").strip()
             return x or None
@@ -223,7 +277,7 @@ class Engine:
             "dialogue": dialogue,
             "motion_id": mid if isinstance(mid, str) and mid in ids else None,
             "emotion": emotion if emotion in EMOTIONS else "평온",
-            "location": location if location in LOCATIONS else None,
+            "location": location if location in (locations or LOCATIONS) else None,
         }
 
     # ---------- 상태 없는 방식: 판정 ----------
@@ -237,7 +291,8 @@ class Engine:
         if need_summary and judge["summary"]:
             state["summary"] = judge["summary"]
             changes.append("요약 갱신")
-        nxt_event = self._tick_events(state, last_user)
+        # 에피소드 중에는 앱이 단계·장면을 정하므로 사건 계산을 건너뛴다 (단계 상승은 _apply에서 건너뜀)
+        nxt_event = None if state["episode"] else self._tick_events(state, last_user)
         if nxt_event:
             changes.append(f"다음 턴 사건: {nxt_event}")
         return {
@@ -252,7 +307,7 @@ class Engine:
     # ---------- 프롬프트 조립 ----------
     def _values(self, state: dict) -> dict:
         days = state["departure_days_left"]
-        return {
+        values = {
             "stage": state["stage"],
             "stage_name": STAGE_NAMES[state["stage"]],
             "affection": state["affection"],
@@ -264,6 +319,15 @@ class Engine:
             "summary": state["summary"] or "아직 없음 (이야기의 시작)",
             "recent_lines": "\n".join(f"- {x}" for x in state.get("recent_lines", [])[-3:]) or "- 없음",
         }
+        if state.get("episode"):  # 에피소드: 본 이야기 단계·호감·요약·비밀 대신 이 밤의 값
+            name = state["episode_stage_name"] or STAGE_NAMES[state["episode_stage"]]
+            values.update(
+                stage=state["episode_stage"], stage_name=name, affection="-",
+                revealed_secrets="-", departure_days_left="-",
+                summary="(특별 에피소드: 본 이야기와 따로인 하룻밤)",
+                episode_stage=state["episode_stage"], episode_stage_name=name,
+            )
+        return values
 
     def _build_system(self, state: dict, event: str | None, motion_list: list[dict] | None = None) -> str:
         values = self._values(state)
@@ -275,6 +339,18 @@ class Engine:
         parts = [
             self.blocks["BASE_SYSTEM"],
             render(self.blocks["STATE_BLOCK"], values),
+        ]
+        episode = EPISODES.get(state.get("episode") or "")
+        if episode:  # 본 이야기 STAGE_n·EVENT_*·첫날 줄 대신 에피소드 블록 (판정은 그대로)
+            parts += [
+                render(self.blocks[episode["block"]], values),
+                render(self.blocks["MOTION_BLOCK"], values),
+                self.blocks["OUTPUT_FORMAT"],
+            ]
+            return "\n\n".join(parts)
+        if state["day"] == 1:  # 앱 37 골목 프롤로그: 첫날 밤에만
+            parts.append(self.blocks["FIRST_NIGHT"])
+        parts += [
             render(self.blocks[f"STAGE_{state['stage']}"], values),
             render(self.blocks["MOTION_BLOCK"], values),
             self.blocks["OUTPUT_FORMAT"],
@@ -325,7 +401,7 @@ class Engine:
     def _judge(self, state: dict, user_message: str, reply: str,
                need_summary: bool = False, recent: list[dict] | None = None) -> dict:
         prompt = (
-            f"[현재 상태]\n단계: {state['stage']} ({STAGE_NAMES[state['stage']]}), "
+            f"[현재 상태]\n단계: {state['stage']} ({state['episode_stage_name'] or STAGE_NAMES[state['stage']]}), "
             f"호감도: {state['affection']}, {state['day']}일째 {state['time_of_day']}, "
             f"장소: {state['location']}\n\n[지금까지의 요약]\n{state['summary'] or '없음'}"
         )
@@ -382,6 +458,9 @@ class Engine:
             if state["stage"] == 5 and state["departure_days_left"] is not None:
                 state["departure_days_left"] = max(0, state["departure_days_left"] - 1)
                 changes.append(f"출발까지 {state['departure_days_left']}일")
+
+        if state["episode"]:  # 에피소드: 호감·플래그·시간대만. 비밀·단계 상승·출발·엔딩은 본 이야기 몫
+            return changes
 
         if (
             "reveal_secret1" in judge["flags"]

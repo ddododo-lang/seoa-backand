@@ -3,3 +3,4 @@ seoa.db
 __pycache__/
 .venv/
 eval_result.md
+eval_scenarios.md

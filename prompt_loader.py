@@ -4,7 +4,7 @@ from pathlib import Path
 
 BLOCK_RE = re.compile(r"<!-- BEGIN:(\w+) -->\n(.*?)\n<!-- END:\1 -->", re.S)
 
-REQUIRED = ["BASE_SYSTEM", "STATE_BLOCK", "MOTION_BLOCK", "OUTPUT_FORMAT", "OPENING", "JUDGE_SYSTEM"] + [
+REQUIRED = ["BASE_SYSTEM", "STATE_BLOCK", "MOTION_BLOCK", "OUTPUT_FORMAT", "OPENING", "JUDGE_SYSTEM", "FIRST_NIGHT"] + [
     f"STAGE_{i}" for i in range(1, 7)
 ]
 

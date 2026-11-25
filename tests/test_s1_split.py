@@ -36,6 +36,24 @@ SPLIT = {
         '- 이름을 부를 수 있을 때도 진지한 순간에만 이름을 부르고, 평소에는 "사장님"이다.',
     ],
 }
+# S3 대화 품질: 바꾸거나 지운 줄(앞부분으로 찾음) → 대신 들어 있어야 할 조각 (빈 목록이면 지움)
+S3_CHANGED = {
+    "2. 응답은 OUTPUT_FORMAT의 JSON": ["2. 응답은 OUTPUT_FORMAT의 JSON 하나로만 한다. action은 지문(서아의 행동·표정·속마음), dialogue는 서아의 대사."],
+    "4. action은 이번 턴에 고른 몸짓": ["4. 외모는 화면에 보이므로 길게 묘사하지 않는다."],
+    "12. 반복 금지": ["12. 반복 금지: 현재 상태의 \"최근 서아 응답\"에 있는 표현, 문장 시작, 말버릇을 다시 쓰지 않는다. 아래"],
+    "17. 유저 메시지 「[유저가 선물함": ["지문·대사는 [말투]·[지문] 규칙대로."],
+    "- 설명하지 않는다. 이유·사정을": [],
+    "- 대사는 많아야 두 마디.": [],
+    "- 지문도 짧게.": [],
+    "- 예: 「방금 찍었어.": [],
+}
+
+
+def s3_parts(line):
+    for head, parts in S3_CHANGED.items():
+        if line.startswith(head):
+            return parts
+    return None
 
 
 def engine():
@@ -71,7 +89,8 @@ class SplitTest(unittest.TestCase):
             line = line.replace(DELETED, "")
             if not line.strip():
                 continue
-            for part in SPLIT.get(line, [line]):
+            s3 = s3_parts(line)
+            for part in SPLIT.get(line, [line]) if s3 is None else s3:
                 self.assertIn(part, s, part)
 
     def test_main_world_follows_base_then_state(self):

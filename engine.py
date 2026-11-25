@@ -37,6 +37,11 @@ NAME_REFUSE_PENALTY = 10        # 첫 거절: 호감 -10, 2단계로
 NAME_REFUSE_AGAIN_PENALTY = 25  # 사과받은 뒤 또 거절: 호감 -25, 다시는 이름 안 부름
 NAME_FORGIVE_MIN_AFFECTION = 40  # 사과로 3단계에 돌아갈 때 호감 최소
 NAME_MAX_LEN = 8
+NAME_EVENT_KEYS = {  # 이 원고 대사가 판정한 답장(last_reply)에 이미 있으면 그 사건을 다음 답장에 또 넣지 않음 (S2-1)
+    "NAME_REFUSED": "그럼말구", "NAME_FORGIVEN": "넘어가줄게", "NAME_REFUSED_AGAIN": "두번은안물어봐",
+}
+NAME_QUIET_MSGS = 3  # 이름 사건을 정한 판정 뒤 유저 메시지 이만큼은 무작위 사건 없음
+NAME_WATCH_LINES = {"asked": "asked", "accepted": "asked", "refused": "refused", "forgiven": "forgiven"}  # name_state → NAME_WATCH 줄
 NAME_STRIP = re.compile(r'[\r\n{}"「」]')
 NAME_CALL = {  # STATE_BLOCK 「이름 부르기」
     "none": "아직 안 부름", "asked": "아직 안 부름",
@@ -169,6 +174,7 @@ def new_state() -> dict:
         "user_name": "",          # S2: 앱 시작 화면의 닉네임(1~8자). 서버는 저장하지 않음
         "name_state": "none",     # NAME_STATES
         "judge_soon": False,      # name_state 가 asked·refused 면 true: 앱이 다음 답마다 바로 판정
+        "name_quiet": 0,          # S2-1: 이름 사건 뒤 무작위 사건을 쉬는 남은 유저 메시지 수
     }
 
 
@@ -265,6 +271,10 @@ def normalize_state(raw: dict | None) -> dict:
     if state["name_state"] not in NAME_STATES:
         state["name_state"] = "none"
     state["judge_soon"] = state["name_state"] in ("asked", "refused")
+    try:
+        state["name_quiet"] = max(0, min(NAME_QUIET_MSGS, int(state["name_quiet"])))
+    except (TypeError, ValueError):
+        state["name_quiet"] = 0
     state["recent_lines"] = [str(x) for x in state["recent_lines"]][-3:]
     state["stage_flags"] = [f for f in state["stage_flags"] if f in ALLOWED_FLAGS - NAME_FLAGS]
     if not isinstance(state["used_events"], dict):
@@ -476,9 +486,10 @@ class Engine:
         progress = None
         if not state["episode"]:  # 대화량 점수·메시지 수는 본 이야기만
             msgs = [m.strip() for m in (last_user or "").split("\n") if m.strip()]
+            state["name_quiet"] = max(0, min(NAME_QUIET_MSGS, state["name_quiet"]) - len(msgs))
             judge["talk_bonus"] = min(self._talk_bonus(msgs, judge), TALK_BONUS_STAGE_MAX - state["stage_bonus"])
             state["stage_user_msgs"] += len(msgs)
-        changes = self._apply(state, judge, None)
+        changes = self._apply(state, judge, None, last_reply)
         if not state["episode"]:
             need = MIN_STAGE_MSGS.get(state["stage"], 0)
             progress = {
@@ -493,7 +504,7 @@ class Engine:
             changes.append("요약 갱신")
         if not state["episode"]:
             self._tick_scene(state)
-            route_event = self._route_event(state)
+            route_event = None if self._name_scene_quiet(state) else self._route_event(state)
             if route_event:
                 self._start_route_scene(state, route_event, changes)
             if stage_before == 6:  # 6단계: 첫 아침 → 그 갈래 조연 마무리 → stayed (오른 판정은 STAGE_UP_6 차례)
@@ -577,6 +588,9 @@ class Engine:
             render(self.blocks["MOTION_BLOCK"], values),
             self.blocks["OUTPUT_FORMAT"],
         ]
+        watch = self._name_watch(state, event, values)
+        if watch:
+            parts.append(watch)
         if state["stage"] == 5 and state["route"] and state["departure_days_left"] is not None:
             parts.append(self.blocks[f"ROUTE_PURSUE_{state['route'].upper()}"])
         if state["stage"] == 6 and state["route"] and not state["morning_done"] and state["ending"] != "stayed":
@@ -594,6 +608,22 @@ class Engine:
         if "ALLEY" in (event, None if event else state["scene"]) and state["route"] == "care":
             parts.append(self.blocks["EVENT_ALLEY_CARE"])
         return "\n\n".join(parts)
+
+    def _name_watch(self, state: dict, event: str | None, values: dict) -> str | None:
+        """S2-1: 본편·유저 이름이 있을 때, 이번 유저 메시지로 이름 장면이 바로 나오게 name_state 에 맞는 줄만.
+        이름 사건이나 이름을 묻는 장면(STAGE_UP_3)이 이번 답장에 이미 있으면 넣지 않음."""
+        key = NAME_WATCH_LINES.get(state.get("name_state") or "")
+        if not key or not state.get("user_name") or state.get("episode") or event in NAME_EVENTS or event == "STAGE_UP_3":
+            return None
+        lines = self.blocks["NAME_WATCH"].split("\n")
+        picked = [line.split("] ", 1)[1] for line in lines if line.startswith(f"[{key}] ")]
+        head = [line for line in lines if not line.startswith("[")]
+        return render("\n".join(head + picked), values)
+
+    @staticmethod
+    def _name_scene_quiet(state: dict) -> bool:
+        """이름을 물은 뒤·사과를 기다리는 동안, 그리고 이름 사건 직후 유저 메시지 몇 개 동안은 사건을 쉼."""
+        return state.get("name_state") in ("asked", "refused") or state.get("name_quiet", 0) > 0
 
     @staticmethod
     def _stage_up_block(state: dict, event: str) -> str | None:
@@ -677,7 +707,9 @@ class Engine:
             state["short_streak"] = 0
 
         if state["pending_event"] or state["ending"] == "departed":
-            return None  # 이미 예약된 사건(DEPARTURE 등)이 있거나 실패 엔딩 뒤. stayed 뒤에는 연인 일상 사건이 이어짐
+            return None  # 이미 예약된 사건(DEPARTURE 등)이 있거나 실패 엔딩 뒤.
+        if self._name_scene_quiet(state):
+            return None  # S2-1: 이름 장면 중·직후에는 무작위 사건(조연 포함)을 끼우지 않음 stayed 뒤에는 연인 일상 사건이 이어짐
         if state["stage"] == 6 and state["route"] and state["ending"] != "stayed":
             return None  # 6단계 성공 전(첫 아침 → 조연 마무리, 길어야 메시지 15개)에는 무작위 사건을 끼우지 않음
         if (
@@ -806,7 +838,7 @@ class Engine:
         }
 
     # ---------- 상태 갱신 ----------
-    def _apply(self, state: dict, judge: dict, event: str | None) -> list[str]:
+    def _apply(self, state: dict, judge: dict, event: str | None, last_reply: str = "") -> list[str]:
         changes = []
 
         cap = AFFECTION_CAP[state["stage"]]
@@ -853,7 +885,7 @@ class Engine:
             state["revealed_secrets"].append("비밀1")
             changes.append("비밀1 공개")
 
-        self._apply_name(state, judge, changes)
+        self._apply_name(state, judge, changes, last_reply)
 
         nxt = self._next_stage(state)
         if nxt:
@@ -875,13 +907,19 @@ class Engine:
             state["scene"], state["scene_judges_left"] = None, 0
 
     @classmethod
-    def _apply_name(cls, state: dict, judge: dict, changes: list[str]) -> None:
+    def _apply_name(cls, state: dict, judge: dict, changes: list[str], last_reply: str = "") -> None:
         """S2 이름 흐름 (본편, 유저 이름이 있을 때만). 단계 상승 판단보다 먼저."""
         ns, flags = state["name_state"], set(judge["flags"])
         if not state["user_name"] or ns in ("none", "closed"):
             return  # closed 뒤에는 이름 관련 판정을 무시
 
+        shown = re.sub(r"\s+", "", last_reply or "")
+
         def event(name: str) -> None:  # 5단계 출발·남은 날 지문은 밀어내지 않음
+            state["name_quiet"] = NAME_QUIET_MSGS
+            if NAME_EVENT_KEYS[name] in shown:  # S2-1: 판정한 답장에서 이미 나왔으면 다음 답장에 또 넣지 않음
+                changes.append(f"{name}: 이번 답장에서 이미 나옴")
+                return
             if state["pending_event"] not in {"DEPARTURE", "LAST_NIGHT", *DAY_MARKERS}:
                 state["pending_event"] = name
 

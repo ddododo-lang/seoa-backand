@@ -30,7 +30,12 @@ STAGE_EVENTS = {
 ALLOWED_FLAGS = {"care", "protect", "outside", "sincere", "pursue", "tease", "comfort", "reveal_secret1"}
 ROUTES = ("tease", "care")  # 앱 51 갈래
 # 크리스마스(s2) 자정 기색: 자정까지 남은 유저 메시지 수 → 그 턴에 한 번 (에피소드 단계 4 미만일 때만, 점점 분명하게)
-XMAS_LATE = {10: "「…밤 꽤 깊었네.」", 5: "「슬슬 들어가야겠다.」", 2: "*서아가 장갑을 끼며 한 걸음 물러선다.*"}
+# 남은 수가 그 구간에 들어오면, 그 구간의 줄을 최근 기록에서 아직 안 했을 때 한 번 (10·5·2 즈음, 점점 분명하게)
+XMAS_LATE = [  # (구간 위, 구간 아래, 줄, 기록에서 찾을 핵심 글)
+    (10, 6, "「…밤 꽤 깊었네.」", "밤 꽤 깊었네"),
+    (5, 3, "「슬슬 들어가야겠다.」", "슬슬 들어가야겠다"),
+    (2, 1, "*서아가 장갑을 끼며 한 걸음 물러선다.*", "장갑을 끼며 한 걸음 물러선다"),
+]
 # 특별 에피소드(앱 42, server-sync.md): state.episode 로 오고, 본 이야기 단계 지침·사건 대신 블록을 넣는다
 EPISODES = {
     "s2": {"block": "EPISODE_XMAS", "locations": ["크리스마스 거리", "서아의 자취방"]},
@@ -257,6 +262,7 @@ class Engine:
         """
         state = normalize_state(state)
         state["gift_moments"] = self._open_moments(state["gift_moments"], history, user_message)
+        state["_xmas_late"] = self._xmas_late(state, history)
         event = state["pending_event"]
         system = self._build_system(state, event, motion_list)
         opening = self.blocks["OPENING"].strip()
@@ -305,6 +311,18 @@ class Engine:
             else:
                 merged.append(dict(m))
         return merged
+
+    @staticmethod
+    def _xmas_late(state: dict, history: list[dict]) -> str | None:
+        """크리스마스 자정 기색: 남은 수의 구간 줄을, 최근 서아 말에 아직 없을 때만. 에피소드 단계 4 이상이면 없음."""
+        left = state.get("episode_turns_left")
+        if state.get("episode") != "s2" or left is None or (state.get("episode_stage") or 0) >= 4:
+            return None
+        recent = " ".join(str(h.get("t") or "") for h in history[-12:] if h.get("r") == "c")
+        for top, bottom, line, key in XMAS_LATE:
+            if bottom <= left <= top:
+                return None if key in recent else line
+        return None
 
     @staticmethod
     def _open_moments(moments: list[dict], history: list[dict], user_message: str = "") -> list[dict]:
@@ -458,9 +476,8 @@ class Engine:
         ]
         episode = EPISODES.get(state.get("episode") or "")
         if episode:  # 본 이야기 STAGE_n·EVENT_*·첫날 줄 대신 에피소드 블록 (판정은 그대로)
-            late = XMAS_LATE.get(state["episode_turns_left"]) if state["episode"] == "s2" else None
-            if late and state["episode_stage"] < 4:  # 4단계(서아가 집으로 데려감) 이상이면 기색 없음
-                values["xmas_late"] = late
+            if state.get("_xmas_late"):  # reply() 가 구간·기록을 보고 정함
+                values["xmas_late"] = state["_xmas_late"]
             parts += [
                 render(self.blocks[episode["block"]], values),
                 *([render(self.blocks["XMAS_LATE"], values)] if "xmas_late" in values else []),

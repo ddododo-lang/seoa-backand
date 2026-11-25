@@ -40,6 +40,8 @@ class SecondFloorTest(unittest.TestCase):  # 1
         base = engine().blocks["BASE_SYSTEM"]
         self.assertIn("2층(사장님 집)에서는 서아가 먼저 다가가지 않는다", base)
         self.assertIn("크리스마스의 자취방은 반대로 서아가 먼저 다가간다", base)
+        self.assertIn("단, 바 '라스트 오더' 2층에서는 피하지 않는다", base)  # 규칙 13 「피한다」와 충돌하지 않게
+        self.assertIn("물러나거나 밀어내지 않고", base)
 
 
 class StormTest(unittest.TestCase):  # 2

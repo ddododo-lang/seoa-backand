@@ -58,24 +58,28 @@ class RouteNormalizeTest(unittest.TestCase):  # 1
         self.assertEqual(judge({"stage": 2, "affection": 41, "route": "care"})["state"]["route"], "care")
 
 
+N2, N3 = {"NIGHT_END_2": 0}, {"NIGHT_END_3": 0}  # S4-C: 2·3단계 갈래 장면은 밤을 넘긴 뒤 (판정이 used_events 를 고치므로 dict() 로 복사해 씀)
+
+
 class RouteEventsTest(unittest.TestCase):  # 2
     def test_stage2_by_route(self):
-        self.assertEqual(judge({"stage": 2, "affection": 39, "route": "tease"}, affection_delta=1)["pending_event"], "DATE")
-        self.assertEqual(judge({"stage": 2, "affection": 40, "route": "care"})["pending_event"], "WALK_HOME")
+        self.assertEqual(judge({"stage": 2, "affection": 14, "route": "tease", "used_events": dict(N2)}, affection_delta=1)["pending_event"], "DATE")
+        self.assertEqual(judge({"stage": 2, "affection": 15, "route": "care", "used_events": dict(N2)})["pending_event"], "WALK_HOME")
 
-    def test_stage2_needs_40_and_no_outside(self):
-        self.assertNotIn(judge({"stage": 2, "affection": 30, "route": "care"})["pending_event"], ("DATE", "WALK_HOME"))
+    def test_stage2_needs_15_and_no_outside(self):  # S4: 15
+        self.assertNotIn(judge({"stage": 2, "affection": 14, "route": "care"})["pending_event"], ("DATE", "WALK_HOME"))
         self.assertNotIn(judge({"stage": 2, "affection": 45, "route": "care", "stage_flags": ["outside"]})["pending_event"],
                          ("DATE", "WALK_HOME"))
 
     def test_stage3_and_4(self):
-        self.assertEqual(judge({"stage": 3, "affection": 55, "route": "tease"})["pending_event"], "STORM")
-        self.assertEqual(judge({"stage": 3, "affection": 55, "route": "care"})["pending_event"], "ROOFTOP")
+        self.assertEqual(judge({"stage": 3, "affection": 55, "route": "tease", "used_events": dict(N3)})["pending_event"], "STORM")
+        self.assertEqual(judge({"stage": 3, "affection": 55, "route": "care", "used_events": dict(N3)})["pending_event"], "ROOFTOP")
         for route in ("tease", "care"):
             self.assertEqual(judge({"stage": 4, "affection": 65, "route": route})["pending_event"], "ALLEY")
 
     def test_once_per_route_event(self):
-        first = judge({"stage": 2, "affection": 41, "route": "tease"})["state"]
+        first = judge({"stage": 2, "affection": 41, "route": "tease", "used_events": dict(N2)})["state"]
+        self.assertEqual(first["pending_event"], "DATE")
         again = judge(dict(first, pending_event=None, scene=None, scene_judges_left=0))
         self.assertNotEqual(again["pending_event"], "DATE")
 
@@ -105,11 +109,11 @@ class RouteEventsTest(unittest.TestCase):  # 2
         self.assertNotIn("배웅해 줬던 날", system_for(tease))
 
     def test_scene_lasts_two_judges(self):
-        st = judge({"stage": 2, "affection": 41, "route": "tease"})["state"]
+        st = judge({"stage": 2, "affection": 41, "route": "tease", "used_events": dict(N2)})["state"]
         st["pending_event"] = None  # 앱이 답장 뒤 비움
-        self.assertIn("하룻밤 애인", system_for(st))
+        self.assertIn("위장 연인 부탁", system_for(st))
         st = judge(st)["state"]
-        self.assertIn("하룻밤 애인", system_for(dict(st, pending_event=None)))
+        self.assertIn("위장 연인 부탁", system_for(dict(st, pending_event=None)))
         st = judge(st)["state"]
         self.assertIsNone(st["scene"])
 
@@ -126,28 +130,18 @@ class RouteEventsTest(unittest.TestCase):  # 2
             self.assertEqual(out["location"], loc)
 
 
-class DepartureTest(unittest.TestCase):  # 3·6
-    def test_three_days_and_markers(self):
+class DepartureTest(unittest.TestCase):  # 3·6 (S4: 남은 날·실패 엔딩 대신 위기 → 연인 / 엇갈림 → 화해, tests/test_s4_crisis.py)
+    def test_no_days_left_any_more(self):
         st = normalize_state({"stage": 4})
         Engine._advance(st, 5, [])
-        self.assertEqual((st["departure_days_left"], st["pending_event"]), (3, "DEPARTURE"))
-        self.assertIn("출발은 사흘 뒤", engine().blocks["EVENT_DEPARTURE"])
+        self.assertEqual((st["departure_days_left"], st["pending_event"]), (None, "CRISIS"))
         r = judge({"stage": 5, "affection": 80, "departure_days_left": 3}, time_advance=True)
-        self.assertEqual((r["state"]["departure_days_left"], r["pending_event"]), (2, "DAYS_LEFT_2"))
-        out = engine(Stub()).reply(r["state"], "…", [], [])
-        self.assertTrue(out["action"].startswith("서아가 떠나기까지, 이틀."))
-        r = judge(dict(r["state"], pending_event=None), time_advance=True)
-        self.assertEqual(r["pending_event"], "DAYS_LEFT_1")
-        r = judge(dict(r["state"], pending_event=None), time_of_day="밤 11시")
-        self.assertEqual(r["pending_event"], "LAST_NIGHT")
-        r = judge(dict(r["state"], pending_event=None), time_of_day="밤 11시")
-        self.assertNotEqual(r["pending_event"], "LAST_NIGHT")  # 한 번만
-        r = judge(dict(r["state"], pending_event=None), time_advance=True)
-        self.assertEqual(r["state"]["ending"], "departed")
+        self.assertIsNone(r["state"]["departure_days_left"])
+        self.assertNotIn(r["pending_event"], ("DAYS_LEFT_2", "DAYS_LEFT_1", "LAST_NIGHT"))
 
     def test_rewind_state_continues(self):
         st = normalize_state({"stage": 5, "affection": 76, "departure_days_left": 3, "ending": None, "route": "care"})
-        self.assertEqual((st["departure_days_left"], st["ending"]), (3, None))
+        self.assertEqual((st["crisis"], st["ending"]), ("on", None))  # 예전 5단계 저장은 위기 중으로
         r = judge(st, "가지 마.", flags=["pursue"])
         self.assertEqual(r["state"]["stage"], 6)
 
@@ -224,7 +218,7 @@ class TalkBonusTest(unittest.TestCase):  # 5
         self.assertEqual(r["state"]["affection"], 30)  # 1단계 상한 30 그대로
 
     def test_min_messages_and_progress(self):
-        base = {"stage": 2, "affection": 45, "stage_flags": ["outside"], "stage_user_msgs": 13}
+        base = {"stage": 2, "affection": 45, "stage_flags": ["outside"], "stage_user_msgs": 7}  # S4: 2→3 최소 9개
         r = judge(base, "한 마디")
         self.assertFalse(r["stage_up"])
         self.assertEqual(r["progress"]["min_msgs_left"], 1)

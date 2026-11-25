@@ -88,11 +88,11 @@ class StepRangeTest(unittest.TestCase):  # 2 차례·단계 범위
         self.assertIn("언니, 둘이 무슨 사이예요?", system_for({"stage": 3, "pending_event": "MARI", "mari_step": 2}))
 
 
-class DepartureLineTest(unittest.TestCase):  # 3
+class DepartureLineTest(unittest.TestCase):  # 3 (S4: 떠나는 소식은 위기 장면의 태오 줄)
     def test_line_without_taeo_second(self):
         st = judge({"stage": 4, "affection": 80, "stage_user_msgs": 20, "taeo_step": 0}, "…")["state"]
-        self.assertEqual(st["pending_event"], "DEPARTURE")
-        self.assertIn("태오가 가져온 일이야. …큰 거.", system_for(st))
+        self.assertEqual(st["pending_event"], "CRISIS")
+        self.assertIn("태오가 큰 일을 물어 왔어. 도시 밖. …새벽에 떠나.", system_for(st))
 
 
 class FrequencyTest(unittest.TestCase):  # 4

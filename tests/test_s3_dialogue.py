@@ -149,7 +149,7 @@ class MemoryTest(unittest.TestCase):  # B5
         llm = JudgeStub({"affection_delta": 5, "flags": ["care"]},
                         {"stage_note": "서아가 손등 상처를 맡겼다."})
         e = engine(llm)
-        r = e.judge({"stage": 1, "affection": 9}, "치료해 줄게", "…알아서 해.")
+        r = e.judge({"stage": 1, "affection": 9, "stage_user_msgs": 2}, "치료해 줄게", "…알아서 해.")  # S4: 1→2 최소 3개
         st = r["state"]
         self.assertEqual((st["stage"], st["stage_note_due"]), (2, 1))
         self.assertNotIn("[단계 기록 요청]", llm.prompts[0])

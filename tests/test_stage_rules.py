@@ -29,14 +29,15 @@ class Stage1To2Test(unittest.TestCase):
     def test_flag_still_required(self):
         self.assertIsNone(Engine._next_stage(state(affection=25, flags=["tease"])))
 
-    def test_min_messages_gate(self):  # 앱 51: 2→3 은 그 단계에서 유저 메시지 15개 이상
-        self.assertIsNone(Engine._next_stage(state(stage=2, affection=40, flags=["outside"], msgs=14)))
-        self.assertEqual(Engine._next_stage(state(stage=2, affection=40, flags=["outside"], msgs=15)), 3)
-        self.assertEqual(Engine._next_stage(state(stage=1, affection=10, flags=["care"], msgs=0)), 2)  # 1→2 는 없음
+    def test_min_messages_gate(self):  # S4: 1→2 3개 · 2→3 9개
+        self.assertIsNone(Engine._next_stage(state(stage=2, affection=25, flags=["outside"], msgs=8)))
+        self.assertEqual(Engine._next_stage(state(stage=2, affection=25, flags=["outside"], msgs=9)), 3)
+        self.assertIsNone(Engine._next_stage(state(stage=1, affection=10, flags=["care"], msgs=2)))
+        self.assertEqual(Engine._next_stage(state(stage=1, affection=10, flags=["care"], msgs=3)), 2)
 
-    def test_stage2_rule_unchanged(self):
-        self.assertIsNone(Engine._next_stage(state(stage=2, affection=39, flags=["outside"])))
-        self.assertEqual(Engine._next_stage(state(stage=2, affection=40, flags=["outside"])), 3)
+    def test_stage2_rule_without_route(self):  # S4: 갈래가 없으면 호감 25 + outside
+        self.assertIsNone(Engine._next_stage(state(stage=2, affection=24, flags=["outside"])))
+        self.assertEqual(Engine._next_stage(state(stage=2, affection=25, flags=["outside"])), 3)
 
 
 if __name__ == "__main__":
@@ -48,7 +49,7 @@ class StageNamesTest(unittest.TestCase):
 
     def test_names_match_app(self):
         from engine import STAGE_NAMES
-        self.assertEqual(list(STAGE_NAMES.values()), ["경계", "티키타카", "썸", "고백 직전", "엇갈림", "연인"])
+        self.assertEqual(list(STAGE_NAMES.values()), ["경계", "티키타카", "썸", "고백 직전", "위기", "연인"])  # S4
 
     def test_prompt_headings_match(self):
         from engine import STAGE_NAMES

@@ -90,7 +90,8 @@ class StepRangeTest(unittest.TestCase):  # 2 차례·단계 범위
 
 class DepartureLineTest(unittest.TestCase):  # 3 (S4: 떠나는 소식은 위기 장면의 태오 줄)
     def test_line_without_taeo_second(self):
-        st = judge({"stage": 4, "affection": 80, "stage_user_msgs": 20, "taeo_step": 0}, "…")["state"]
+        st = judge({"stage": 4, "affection": 80, "stage_user_msgs": 20, "taeo_step": 0, "route": "care",
+                    "used_events": {"ROUTE_ALLEY": 1}}, "…")["state"]  # S4-1: 그 골목을 마침
         self.assertEqual(st["pending_event"], "CRISIS")
         self.assertIn("태오가 큰 일을 물어 왔어. 도시 밖. …새벽에 떠나.", system_for(st))
 

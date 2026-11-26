@@ -45,8 +45,9 @@ def system_for(state):
     return engine()._build_system(st, st["pending_event"], [])
 
 
-def at_stage2_ready(**extra):  # 2→3 조건이 찬 2단계
-    return {"stage": 2, "affection": 45, "stage_flags": ["outside"], "stage_user_msgs": 20, **extra}
+def at_stage2_ready(**extra):  # 2→3 조건이 찬 2단계 (S4-1: 갈래 장면을 마침. outside 만으로는 안 오름)
+    return {"stage": 2, "affection": 45, "stage_flags": ["outside"], "stage_user_msgs": 20, "route": "care",
+            "used_events": {"NIGHT_END_2": 0, "ROUTE_WALK_HOME": 1}, **extra}
 
 
 def asked_state():

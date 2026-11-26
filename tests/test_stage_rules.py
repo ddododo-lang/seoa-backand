@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from engine import Engine, new_state  # noqa: E402
+from engine import Engine, new_state, normalize_state  # noqa: E402
 
 
 def state(stage=1, affection=0, flags=(), msgs=99):
@@ -29,15 +29,16 @@ class Stage1To2Test(unittest.TestCase):
     def test_flag_still_required(self):
         self.assertIsNone(Engine._next_stage(state(affection=25, flags=["tease"])))
 
-    def test_min_messages_gate(self):  # S4: 1→2 3개 · 2→3 9개
-        self.assertIsNone(Engine._next_stage(state(stage=2, affection=25, flags=["outside"], msgs=8)))
-        self.assertEqual(Engine._next_stage(state(stage=2, affection=25, flags=["outside"], msgs=9)), 3)
+    def test_min_messages_gate(self):  # S4: 1→2 3개 · 2→3 9개 (S4-1: 2→3 은 갈래 장면을 마쳐야)
+        done = {"route": "care", "used_events": {"ROUTE_WALK_HOME": 1}}
+        self.assertIsNone(Engine._next_stage(normalize_state(dict(state(stage=2, affection=25, msgs=8), **done))))
+        self.assertEqual(Engine._next_stage(normalize_state(dict(state(stage=2, affection=25, msgs=9), **done))), 3)
         self.assertIsNone(Engine._next_stage(state(stage=1, affection=10, flags=["care"], msgs=2)))
         self.assertEqual(Engine._next_stage(state(stage=1, affection=10, flags=["care"], msgs=3)), 2)
 
-    def test_stage2_rule_without_route(self):  # S4: 갈래가 없으면 호감 25 + outside
+    def test_stage2_rule_without_route(self):  # S4-1: 갈래가 없으면 outside 로도 안 오름(갈래 사건 때 서버가 갈래를 정함)
         self.assertIsNone(Engine._next_stage(state(stage=2, affection=24, flags=["outside"])))
-        self.assertEqual(Engine._next_stage(state(stage=2, affection=25, flags=["outside"])), 3)
+        self.assertIsNone(Engine._next_stage(state(stage=2, affection=25, flags=["outside"])))
 
 
 if __name__ == "__main__":

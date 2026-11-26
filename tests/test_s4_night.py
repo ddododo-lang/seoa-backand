@@ -112,8 +112,11 @@ class NextNightTest(unittest.TestCase):
                               "scene_judges_left": 2, "day": 2})
         self.assertIn(START_3["tease"], chat(st)[1])
         self.assertNotIn("폭우로 길이 막혀", chat(st)[1])  # 첫마디 답장에는 갈래 장면을 잇지 않음
-        st = judge(st, "[다음 밤]")["state"]
-        self.assertEqual((st["day"], st["scene"], st["night_next"]), (5, None, None))
+        r = judge(st, "[다음 밤]")
+        st = r["state"]  # S4-1: 밤 넘기기로 닫힌 장면은 마친 것이 아님 → 다음 밤에 처음부터 다시
+        self.assertEqual((st["day"], st["night_next"], r["pending_event"], st["scene"], st["scene_msgs"]),
+                         (5, None, "STORM", "STORM", 0))
+        self.assertTrue(any("중단(밤 넘기기)" in c for c in r["changes"]))
         care = normalize_state({"stage": 3, "route": "care", "night_next": "NIGHT_START_3_CARE"})
         self.assertIn(START_3["care"], chat(care)[1])
 

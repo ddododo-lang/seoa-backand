@@ -9,6 +9,7 @@
 import inspect
 import os
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -116,6 +117,7 @@ class JudgeIn(BaseModel):
     last_reply: str = Field(default="", max_length=2000)
     need_summary: bool = False
     recent: list[Turn] = []  # need_summary일 때 요약에 쓸 최근 대화
+    reply_ok: Any = None  # S4-1-1(선택): last_user 메시지마다 서아 답장이 정상이었는지 [true, false, …]. 모양이 틀리면 서버가 무시
 
 
 def check_char(char: str) -> None:
@@ -145,7 +147,7 @@ def front_judge(body: JudgeIn):
     check_char(body.char)
     result = engine.judge(
         body.state, body.last_user, body.last_reply,
-        need_summary=body.need_summary, recent=[t.model_dump() for t in body.recent],
+        need_summary=body.need_summary, recent=[t.model_dump() for t in body.recent], reply_ok=body.reply_ok,
     )
     response = {k: result[k] for k in ("state", "stage_up", "flags", "pending_event", "progress")}
     if DEBUG:

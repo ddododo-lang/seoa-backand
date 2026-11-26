@@ -1,4 +1,4 @@
-"""S4-1 핵심 서사 진행 보완 (A 필수 갈래 사건 · 관계 상승). 키 없이 돈다(FakeLLM).
+"""S4-1 핵심 서사 진행 보완 (A 필수 갈래 사건 · 관계 상승 · B 위기·엇갈림·화해 · C 단계 기억·안정성). 키 없이 돈다(FakeLLM).
 실행: python -m unittest discover -s tests -v"""
 import sys
 import unittest
@@ -164,6 +164,148 @@ class OrderTest(unittest.TestCase):  # A3·A4
               "used_events": {"NIGHT_END_3": 1, "ROUTE_ROOFTOP": 1}, "night_next": "NIGHT_START_3_CARE"}
         self.assertIsNone(Engine._next_stage(normalize_state(st)))
         self.assertEqual(Engine._next_stage(normalize_state(dict(st, night_next=None))), 4)
+
+
+class PromptStub(Stub):
+    """판정 입력(prompt)을 남겨 두는 Stub."""
+
+    def complete(self, system, prompt, json_mode=False, budget_sec=None):
+        self.prompt = prompt
+        return super().complete(system, prompt, json_mode, budget_sec)
+
+
+WON_CARE = "*난간에서 내려온다.* …내려가자. 같이."
+RECONCILE = "*몸을 돌린다.* …늦었잖아. 그래도, 왔으니까."
+
+
+def crisis_start(route="care"):
+    """4→5 판정을 지나 위기 소식(CRISIS)이 예약된 state."""
+    r = judge({"stage": 4, "affection": 60, "stage_user_msgs": 6, "route": route, "used_events": {"ROUTE_ALLEY": 1},
+               "turn": 9}, flags=["sincere"])  # 위기 전 진심
+    assert r["state"]["stage"] == 5 and r["pending_event"] == "CRISIS"
+    return dict(r["state"], pending_event=None)
+
+
+def rift_night(**extra):
+    """엇갈림, 「며칠 뒤 밤」이 지난 상태."""
+    return {"stage": 5, "affection": 40, "route": "care", "crisis": "rift", "turn": 20,
+            "used_events": {"CRISIS": 5, "RIFT_START": 12}, **extra}
+
+
+class CrisisJudgeTest(unittest.TestCase):  # B1
+    def test_sincere_before_crisis_does_not_win(self):
+        st = crisis_start()
+        self.assertEqual((st["stage"], st["crisis"]), (5, "on"))
+        _, st = step(st, "가지 마", flags=["sincere"])  # 소식 답장을 판정하는 차례(그 전 메시지)
+        self.assertEqual((st["stage"], st["crisis_msgs"]), (5, 0))
+        _, st = step(st, "가지 마", flags=["pursue"])
+        self.assertEqual(st["stage"], 6)
+
+    def test_batch_after_news_counts(self):
+        st = crisis_start()
+        llm = PromptStub({"flags": ["pursue"]})
+        r = engine(llm).judge(st, "응\n가지 마\n여기 있어", REPLY)  # 첫째만 소식 전
+        self.assertEqual(r["state"]["stage"], 6)
+        self.assertIn("[위기 판정]", llm.prompt)
+        self.assertIn("첫 번째 유저 메시지는 서아가 소식을 꺼내기 전의 말이다", llm.prompt)
+        self.assertIn("정확한 단어가 아니어도 sincere 또는 pursue", llm.prompt)
+        st = crisis_start()
+        r, st = step(st, "응\n그렇구나\n음")
+        self.assertEqual((st["stage"], st["crisis_msgs"]), (5, 2))
+
+    def test_won_line_already_shown_counts(self):
+        st = crisis_start()
+        _, st = step(st, "응")
+        r = engine(Stub()).judge(st, "…있어 줘", WON_CARE)  # 판정 flags 가 비어도 성공 대사가 나왔으면 성공
+        self.assertEqual((r["state"]["stage"], r["state"]["won_line"], r["pending_event"]), (6, None, "STAGE_UP_6"))
+
+    def test_fallback_news_is_redone(self):
+        st = crisis_start()
+        r, st = step(st, "응", "…")
+        self.assertEqual((r["pending_event"], st["crisis_msgs"]), ("CRISIS", 0))
+        _, st = step(st, "가지 마", flags=["sincere"])  # 다시 낸 소식 답장을 판정하는 차례
+        self.assertEqual(st["stage"], 5)
+
+    def test_six_fail_then_rift(self):
+        st = crisis_start()
+        _, st = step(st, "응")
+        for _ in range(2):
+            r, st = step(st)
+        self.assertEqual((st["crisis"], r["pending_event"], st["rift_sorry"]), ("rift", "RIFT_START", False))
+
+
+class RiftTest(unittest.TestCase):  # B2
+    def open_door(self, st):
+        for _ in range(4):
+            r, st = step(st)
+            if r["pending_event"] == "RECONCILE_OPEN":
+                return st
+        raise AssertionError("문이 안 열림")
+
+    def test_early_apology_remembered(self):
+        r, st = step(rift_night(turn=13), "그 밤에 미안했어\n진짜로", flags=["apologize"])  # RIFT_START 뒤 한 번 답한 말
+        self.assertTrue(st["rift_sorry"])
+        self.assertEqual(st["stage"], 5)  # 문이 열리기 전에는 화해 안 함
+        st = self.open_door(st)  # 화해의 문은 반드시 겪음(최소 메시지 그대로)
+        self.assertIn("같은 말을 다시 요구하지 않는다", system_for(st))
+        _, st = step(st, "응")  # 문을 연 답장을 판정하는 차례
+        self.assertEqual(st["stage"], 5)
+        r, st = step(st, "응")  # 문 뒤 유저 답: 다시 사과하지 않아도
+        self.assertEqual((st["stage"], st["won_line"], r["pending_event"]), (6, "WON_RECONCILE", "STAGE_UP_6"))
+        self.assertFalse(st["rift_sorry"])
+
+    def test_withdraw_no_forced_reconcile(self):
+        _, st = step(rift_night(), "미안", flags=["apologize"])
+        self.assertTrue(st["rift_sorry"])
+        _, st = step(st, "아니 됐어. 다 끝났어", flags=["withdraw"])
+        self.assertFalse(st["rift_sorry"])
+        st = self.open_door(st)
+        _, st = step(st, "응")
+        _, st = step(st, "응")
+        self.assertEqual(st["stage"], 5)
+        _, st = step(st, "미안해 그날", flags=["apologize"])
+        self.assertEqual(st["stage"], 6)
+
+    def test_withdraw_after_door(self):
+        _, st = step(rift_night(), "미안", flags=["apologize"])
+        self.assertTrue(st["rift_sorry"])
+        st = self.open_door(st)
+        _, st = step(st, "응")
+        _, st = step(st, "몰라 이제 상관없어", flags=["withdraw"])
+        self.assertEqual((st["stage"], st["rift_sorry"]), (5, False))
+
+    def test_name_apology_is_not_crisis_apology(self):
+        st = rift_night(user_name="도윤", name_state="refused")
+        r, st = step(st, "이름 거절해서 미안", flags=["apologize"])
+        self.assertEqual((st["name_state"], st["rift_sorry"]), ("forgiven", False))
+        st = rift_night(user_name="도윤", name_state="forgiven")
+        _, st = step(st, "그날 미안해", flags=["apologize"])
+        self.assertTrue(st["rift_sorry"])
+
+    def test_before_rift_messages_not_remembered(self):
+        st = dict(rift_night(), night_next="RIFT_NIGHT", turn=12)  # RIFT_START 를 정한 바로 다음 판정
+        _, st = step(st, "미안", flags=["apologize"])  # 엇갈림 답장을 받기 전의 말
+        self.assertFalse(st["rift_sorry"])
+
+    def test_fallback_door_is_redone(self):
+        st = rift_night(crisis_msgs=6, used_events={"CRISIS": 5, "RIFT_START": 12, "RECONCILE_OPEN": 20}, turn=21)
+        r, st = step(st, "응", "…")
+        self.assertEqual(r["pending_event"], "RECONCILE_OPEN")
+
+    def test_rift_sorry_normalize(self):
+        self.assertFalse(normalize_state({"stage": 5, "crisis": "on", "rift_sorry": True})["rift_sorry"])
+        self.assertTrue(normalize_state({"stage": 5, "crisis": "rift", "rift_sorry": True})["rift_sorry"])
+        self.assertFalse(normalize_state({})["rift_sorry"])
+
+
+class WonLineTest(unittest.TestCase):  # B3
+    def test_reconcile_line_not_repeated(self):
+        st = rift_night(crisis_msgs=8, rift_sorry=True, used_events={"CRISIS": 5, "RIFT_START": 12, "RECONCILE_OPEN": 15})
+        r = engine(Stub()).judge(st, "응", RECONCILE)
+        st = r["state"]
+        self.assertEqual((st["stage"], st["won_line"]), (6, None))
+        self.assertNotIn("…늦었잖아. 그래도, 왔으니까.", system_for(st))
+        self.assertIn("매일 온 거, 술 때문 아니었어.", system_for(st))
 
 
 class LoversTest(unittest.TestCase):  # B4 (연인 단계 사건)

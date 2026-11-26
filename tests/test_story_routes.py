@@ -152,7 +152,7 @@ class DepartureTest(unittest.TestCase):  # 3·6 (S4: 남은 날·실패 엔딩 �
     def test_rewind_rule_and_strict_day(self):
         e = engine()
         self.assertIn("「…다시, 그 밤.」", e.blocks["BASE_SYSTEM"])
-        self.assertIn("5단계(엇갈림)에서는 장면이 분명히 다음 날로 넘어갈 때만", e.blocks["JUDGE_SYSTEM"])
+        self.assertIn("5단계(위기·엇갈림)에서는 장면이 분명히 다음 날로 넘어갈 때만", e.blocks["JUDGE_SYSTEM"])  # S4-1: 5단계 이름을 위기·엇갈림으로
 
 
 class GiftMomentTest(unittest.TestCase):  # 4

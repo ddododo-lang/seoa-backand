@@ -29,10 +29,11 @@ STAGE_EVENTS = {  # 무작위 사건. 마리·태오는 차례·단계 범위(SI
     6: ["STORM", "ROOFTOP", "BLACKOUT", "INJURY"],  # 연인 일상(S4-1: DATE 위장 연인은 뺌, 겪은 갈래 장면도 뺌). 마리·태오 마무리는 첫 아침 뒤 따로 한 번
 }
 ALLOWED_FLAGS = {"care", "protect", "outside", "sincere", "pursue", "tease", "comfort", "reveal_secret1",
-                 "refuse_name", "apologize"}
+                 "refuse_name", "apologize", "withdraw"}
 # S2 유저 이름: 3단계에 오르며 이름으로 부르고 싶다고 묻고, 거절하면 관계가 흔들린다 (본편만)
 NAME_STATES = ("none", "asked", "accepted", "refused", "forgiven", "closed")
 NAME_FLAGS = {"refuse_name", "apologize"}  # 판정 flags 로만 쓰고 stage_flags 에는 넣지 않음
+JUDGE_ONLY_FLAGS = NAME_FLAGS | {"withdraw"}  # S4-1 withdraw: 엇갈림에서 사과·진심을 거둠(판정 flags 로만)
 NAME_EVENTS = {"NAME_REFUSED", "NAME_FORGIVEN", "NAME_REFUSED_AGAIN"}
 NAME_REFUSE_PENALTY = 10        # 첫 거절: 호감 -10, 2단계로
 NAME_REFUSE_AGAIN_PENALTY = 25  # 사과받은 뒤 또 거절: 호감 -25, 다시는 이름 안 부름
@@ -134,6 +135,14 @@ NIGHT_END_AFTER = 5         # 그 단계 유저 메시지(상징 장면을 받�
 NIGHT_WAIT_MAX = 6          # 예전 앱처럼 「[다음 밤]」이 안 오면 유저 메시지 이만큼 뒤 서버가 밤을 넘김(첫마디 없이)
 NIGHT_LOCATION = "바 '라스트 오더' 1층"
 WON_KEYS = {"WON_TEASE": "연기아니지", "WON_CARE": "내려가자", "WON_RECONCILE": "늦었잖아"}  # 판정한 답장에 이 원고 대사가 있으면 다시 넣지 않음
+# S4-1: 판정한 답장에 성공 대사가 통째로 나왔으면(공백 빼고 모두 있음) 판정 flags 가 비어도 마음을 확인한 것으로 봄
+WON_SHOWN = {"WON_TEASE": ("연기아니지",), "WON_CARE": ("내려가자", "같이"), "WON_RECONCILE": ("늦었잖아", "왔으니까")}
+CRISIS_JUDGE_NOTE = ("[위기 판정] 서아가 새벽에 떠난다는 소식을 꺼낸 뒤다. 유저가 진심을 말하거나, 가지 말라고 붙잡거나, "
+                     "오해를 풀어 주는 말이면 정확한 단어가 아니어도 sincere 또는 pursue 를 넣는다. "
+                     "단순한 장난이나 짧은 맞장구만으로는 넣지 않는다.")
+CRISIS_FIRST_NOTE = "첫 번째 유저 메시지는 서아가 소식을 꺼내기 전의 말이다. sincere·pursue 는 그 뒤 메시지만 보고 정한다."
+RIFT_JUDGE_NOTE = ("[엇갈림 판정] 위기에서 엇갈려 서아가 거리를 두고 있다. 관계에 대한 사과는 apologize, 진심은 sincere. "
+                   "앞서 한 사과·진심을 거두거나 관계 회복을 거부하면 withdraw.")
 GIFT_MOMENT_GAP = 10       # 같은 순간 선물은 준 뒤 유저 메시지 이만큼 지나야 다시 엶
 FIRST_NIGHT_TURNS = 3     # 첫날 밤 사정(손등의 피)은 유저 메시지 이만큼까지만 넣음. 그 뒤엔 같은 묘사가 반복되지 않게 뺌
 GIFT_MOMENT_QUIET = 3      # 순간 선물을 준 뒤 이만큼은 어떤 순간 선물도 열지 않음(자주 넣지 않기)
@@ -222,6 +231,7 @@ def new_state() -> dict:
         "night_card": None,       # S4-C: 시간 카드 문구 「2일째 밤」·「며칠 뒤 밤」
         "night_wait": 0,          # S4-C: night_next 를 정한 뒤 「[다음 밤]」 없이 온 유저 메시지 수
         "scene_msgs": 0,          # S4-1: 열린 갈래 장면에서 정상으로 나간 서아 답장 수(시작 답장 포함). SCENE_REPLIES_DONE 이면 마침
+        "rift_sorry": False,      # S4-1: 엇갈림이 된 뒤 유효한 사과·진심을 받아 둠(화해의 문 뒤에 반영, withdraw 면 지움)
     }
 
 
@@ -341,6 +351,7 @@ def normalize_state(raw: dict | None) -> dict:
         elif state["stage"] == 6:
             state["crisis"] = "done"
     state["rewind_offer"] = state["rewind_offer"] is True
+    state["rift_sorry"] = state["rift_sorry"] is True and state["crisis"] == "rift"
     if state["won_line"] not in WON_KEYS:
         state["won_line"] = None
     ev = state["pending_event"]
@@ -377,7 +388,7 @@ def normalize_state(raw: dict | None) -> dict:
     state["promises"] = [x.strip()[:MEMO_MAX_LEN] for x in promises if isinstance(x, str) and x.strip()][-PROMISES_MAX:]
     if state["hint_due"] not in HINT_BLOCKS or state["episode"]:
         state["hint_due"] = None
-    state["stage_flags"] = [f for f in state["stage_flags"] if f in ALLOWED_FLAGS - NAME_FLAGS]
+    state["stage_flags"] = [f for f in state["stage_flags"] if f in ALLOWED_FLAGS - JUDGE_ONLY_FLAGS]
     if not isinstance(state["used_events"], dict):
         state["used_events"] = {}
     return state
@@ -617,7 +628,9 @@ class Engine:
             judge = {"affection_delta": 0, "flags": [], "time_advance": False, "time_of_day": "", "summary": "",
                      "stage_note": "", "promise": "", "reason": "다음 밤"}
         else:
-            judge = self._judge(state, real_user if next_night else last_user, last_reply, need_summary, recent or [])
+            notes = [] if state["episode"] else self._judge_notes(state, len(msgs))
+            judge = self._judge(state, real_user if next_night else last_user, last_reply, need_summary, recent or [],
+                                notes=notes)
         if next_night:  # 날짜는 밤 넘기기가 정함. 「[다음 밤]」만 왔으면 호감·플래그 0
             judge.update(time_advance=False, time_of_day="")
             if not msgs:
@@ -633,6 +646,8 @@ class Engine:
             state["won_line"], state["rewind_offer"] = None, False  # S4: 한 번만
             self._tick_scene(state, len(msgs), fallback, changes)  # 단계 조건이 갈래 장면 「마침」을 보므로 단계 판단보다 먼저
             changes += self._remember(state, judge)
+        # S4-1: 이름 거절에 대한 사과(사과를 기다리던 중의 apologize)는 관계 위기 사과로 세지 않음
+        name_sorry = bool(state["user_name"]) and state["name_state"] == "refused" and "apologize" in judge["flags"]
         changes += self._apply(state, judge, None, last_reply)
         if not state["episode"] and state["night_next"]:  # S4-C 밤 넘기기
             if next_night:
@@ -642,7 +657,7 @@ class Engine:
                 if state["night_wait"] >= NIGHT_WAIT_MAX:
                     self._next_night(state, changes, f"「{NEXT_NIGHT}」 없이 메시지 {state['night_wait']}개")
         if not state["episode"] and stage_before == 5:
-            self._crisis(state, judge, last_reply, len(msgs), changes)
+            self._crisis(state, judge, last_reply, len(msgs), changes, fallback, name_sorry)
         if not state["episode"] and state["stage"] != stage_before:
             state["stage_note_due"] = stage_before  # S3: 끝난 단계. 다음 판정에 한 문장을 부탁함
         if not state["episode"]:
@@ -823,6 +838,8 @@ class Engine:
             parts = [] if event == "RIFT_START" else [self.blocks["RIFT"]]
             if "RECONCILE_OPEN" in used and event != "RECONCILE_OPEN":
                 parts.append(self.blocks["RECONCILE_WATCH"])
+                if state.get("rift_sorry"):  # S4-1: 앞서 받은 사과·진심. 같은 말을 다시 요구하지 않음
+                    parts.append(self.blocks["RECONCILE_REMEMBERED"])
             return parts
         return []
 
@@ -907,21 +924,67 @@ class Engine:
             return None
         return event
 
-    def _crisis(self, state: dict, judge: dict, last_reply: str, n_msgs: int, changes: list[str]) -> None:
+    @staticmethod
+    def _event_after(state: dict, key: str, n_msgs: int, fallback: bool) -> int:
+        """S4-1: 이번 묶음에서 그 사건 답장(CRISIS·RIFT_START·RECONCILE_OPEN) 뒤에 온 유저 메시지 수.
+        사건을 정한 바로 다음 판정만 따로 본다: 메시지 하나면 사건 답장을 받기 전의 말(0), 여럿이면 첫째만 그 전(n-1).
+        -1: 그 하나의 답장이 예비 지문이라 사건이 나가지 않음(다시 넣어야 함). 앱이 아직 사건 답장을 내지 않았으면 0."""
+        used = state["used_events"]
+        if key not in used:
+            return n_msgs
+        if state["pending_event"] == key:
+            used[key] = state["turn"]  # 예약만 됨: 사건 답장이 나간 다음 판정부터 다시 셈
+            return 0
+        if state["turn"] >= used[key] + 2:
+            return n_msgs
+        if n_msgs <= 1:
+            return -1 if n_msgs == 1 and fallback else 0
+        return n_msgs - 1
+
+    @staticmethod
+    def _won_shown(won: str, shown: str) -> bool:
+        return all(k in shown for k in WON_SHOWN[won])
+
+    def _judge_notes(self, state: dict, n_msgs: int) -> list[str]:
+        """S4-1: 위기·엇갈림 판정 지시(맥락으로 인정, 위기 소식 전 메시지는 빼고)."""
+        if state["stage"] != 5:
+            return []
+        if state["crisis"] == "on":
+            used = state["used_events"]
+            first = "CRISIS" in used and state["turn"] < used["CRISIS"] + 2 and n_msgs > 1
+            return [CRISIS_JUDGE_NOTE + (" " + CRISIS_FIRST_NOTE if first else "")]
+        if state["crisis"] == "rift":
+            return [RIFT_JUDGE_NOTE]
+        return []
+
+    def _crisis(self, state: dict, judge: dict, last_reply: str, n_msgs: int, changes: list[str],
+                fallback: bool = False, name_sorry: bool = False) -> None:
         """S4-B 5단계: 위기(on) 중 마음 확인(sincere·pursue)이면 6단계, 메시지 6개가 지나면 엇갈림(rift).
-        엇갈림은 다음 밤부터 메시지를 세어 RECONCILE_OPEN, 그 뒤 사과·진심(apologize·sincere)이면 6단계."""
+        엇갈림은 다음 밤부터 메시지를 세어 RECONCILE_OPEN, 그 뒤 사과·진심(apologize·sincere)이면 6단계.
+        S4-1: 위기 소식 답장 뒤의 메시지부터 셈(묶음이면 첫째만 뺌), 성공 대사가 이미 나왔으면 성공으로 봄,
+        엇갈린 뒤의 사과·진심은 rift_sorry 로 기억해 화해의 문 뒤에 반영(withdraw 면 지움), 이름 사과는 빼고 봄,
+        사건 답장이 예비 지문이었으면 사건을 다시 넣음."""
         flags, used, turn = set(judge["flags"]), state["used_events"], state["turn"]
+        if name_sorry:
+            flags.discard("apologize")  # 이름 거절에 대한 사과 ≠ 관계 위기 사과
         shown = re.sub(r"\s+", "", last_reply or "")
         route = state["route"] or "care"
         if state["crisis"] == "on":
-            if turn < used.get("CRISIS", -10_000) + 2:
+            post = self._event_after(state, "CRISIS", n_msgs, fallback)
+            if post < 0:
+                state["pending_event"], used["CRISIS"] = "CRISIS", turn
+                changes.append("위기 소식 답장이 예비 지문 → 다음 답장에 다시")
+                return
+            if not post:
                 return  # 소식을 꺼낸 답장을 판정하는 차례: 유저가 아직 그 소식에 답하지 않음
-            state["crisis_msgs"] += n_msgs
-            if flags & {"sincere", "pursue"}:
-                self._won(state, f"WON_{route.upper()}", shown, changes, "위기에서 마음 확인")
+            state["crisis_msgs"] += post
+            won = f"WON_{route.upper()}"
+            if flags & {"sincere", "pursue"} or self._won_shown(won, shown):
+                self._won(state, won, shown, changes, "위기에서 마음 확인")
             elif state["crisis_msgs"] >= CRISIS_MAX_MSGS:
                 state["crisis"], state["crisis_msgs"] = "rift", 0
                 state["affection"] = RIFT_AFFECTION
+                state["rift_sorry"] = False
                 state["pending_event"], state["rewind_offer"] = "RIFT_START", True
                 state["stage_hints"], state["hint_msgs"], state["hint_due"] = 0, 0, None
                 state["used_events"]["RIFT_START"] = turn
@@ -930,19 +993,39 @@ class Engine:
             elif state["crisis_msgs"] >= CRISIS_HINT_MSGS and not state["stage_hints"]:
                 self._set_hint(state, "HINT_5", state["crisis_msgs"], changes)
             return
-        if state["crisis"] != "rift" or not self._rift_night_started(state):
+        if state["crisis"] != "rift":
+            return
+        post = max(0, self._event_after(state, "RIFT_START", n_msgs, fallback))  # 엇갈림이 된 뒤의 메시지만
+        if post and "withdraw" in flags:
+            if state["rift_sorry"]:
+                changes.append("엇갈림: 앞의 사과·진심을 거둠")
+            state["rift_sorry"] = False
+        elif post and flags & {"apologize", "sincere"} and not state["rift_sorry"]:
+            state["rift_sorry"] = True
+            changes.append("엇갈림: 사과·진심을 기억해 둠 (화해의 문 뒤에 반영)")
+        if not self._rift_night_started(state):
             return
         state["crisis_msgs"] += n_msgs
         opened = used.get("RECONCILE_OPEN")
-        if opened is not None and turn >= opened + 2 and flags & {"apologize", "sincere"}:
+        if opened is None:
+            if state["crisis_msgs"] >= RIFT_OPEN_MSGS and not state["pending_event"]:
+                state["pending_event"] = "RECONCILE_OPEN"
+                used["RECONCILE_OPEN"] = turn
+                state["hint_msgs"] = state["crisis_msgs"]
+                changes.append("화해의 문: RECONCILE_OPEN" + (" (사과·진심을 기억하고 있음)" if state["rift_sorry"] else ""))
+            return
+        after = self._event_after(state, "RECONCILE_OPEN", n_msgs, fallback)
+        if after < 0:
+            state["pending_event"], used["RECONCILE_OPEN"] = "RECONCILE_OPEN", turn
+            changes.append("화해의 문 답장이 예비 지문 → 다음 답장에 다시")
+            return
+        sorry = "withdraw" not in flags and (bool(flags & {"apologize", "sincere"}) or state["rift_sorry"])
+        if after and (sorry or self._won_shown("WON_RECONCILE", shown)):
             state["affection"] = max(state["affection"], RECONCILE_MIN_AFFECTION)
-            self._won(state, "WON_RECONCILE", shown, changes, "엇갈림에서 화해")
-        elif opened is None and state["crisis_msgs"] >= RIFT_OPEN_MSGS and not state["pending_event"]:
-            state["pending_event"] = "RECONCILE_OPEN"
-            used["RECONCILE_OPEN"] = turn
-            state["hint_msgs"] = state["crisis_msgs"]
-            changes.append("화해의 문: RECONCILE_OPEN")
-        elif (opened is not None and not state["stage_hints"]
+            why = "엇갈림에서 화해" + ("" if flags & {"apologize", "sincere"} else " (앞서 받은 사과·진심)")
+            state["rift_sorry"] = False
+            self._won(state, "WON_RECONCILE", shown, changes, why)
+        elif (not state["stage_hints"] and not state["rift_sorry"]
               and state["crisis_msgs"] - state["hint_msgs"] >= RECONCILE_HINT_MSGS):
             self._set_hint(state, "HINT_6", state["crisis_msgs"], changes)
 
@@ -1136,7 +1219,7 @@ class Engine:
         return line
 
     def _judge(self, state: dict, user_message: str, reply: str,
-               need_summary: bool = False, recent: list[dict] | None = None) -> dict:
+               need_summary: bool = False, recent: list[dict] | None = None, notes: list[str] | None = None) -> dict:
         prompt = (
             f"[현재 상태]\n단계: {state['stage']} ({state['episode_stage_name'] or STAGE_NAMES[state['stage']]}), "
             f"호감도: {state['affection']}, {state['day']}일째 {state['time_of_day']}, "
@@ -1153,6 +1236,8 @@ class Engine:
         due = None if state["episode"] else state.get("stage_note_due")
         if due:  # S3: 끝난 단계를 한 문장으로
             prompt += f"\n\n[단계 기록 요청] {due}단계({STAGE_NAMES[due]})를 한 문장으로"
+        for note in notes or []:  # S4-1 위기·엇갈림 판정 지시
+            prompt += f"\n\n{note}"
         prompt += f"\n\n[유저]\n{user_message}\n\n[서아]\n{reply}"
         neutral = {"affection_delta": 0, "flags": [], "time_advance": False,
                    "time_of_day": "", "summary": "", "stage_note": "", "promise": "", "reason": "판정 실패"}
@@ -1207,7 +1292,7 @@ class Engine:
             changes.append(f"호감도 {before} → {state['affection']}")
 
         for flag in judge["flags"]:
-            if flag not in state["stage_flags"] and flag not in NAME_FLAGS:
+            if flag not in state["stage_flags"] and flag not in JUDGE_ONLY_FLAGS:
                 state["stage_flags"].append(flag)
 
         if judge["time_of_day"]:
@@ -1338,12 +1423,12 @@ class Engine:
             changes.append("비밀1 공개")
         if nxt == 5:  # S4: 그 골목에 이어 같은 밤, 서아가 새벽에 떠난다는 소식을 꺼냄 (DEPARTURE 대신)
             state["pending_event"] = "CRISIS"
-            state["crisis"], state["crisis_msgs"] = "on", 0
+            state["crisis"], state["crisis_msgs"], state["rift_sorry"] = "on", 0, False
             state["used_events"]["CRISIS"] = state["turn"]  # 소식을 꺼낸 답장을 판정하는 차례는 셈하지 않음
             changes.append("위기: 새벽에 떠난다는 소식 (CRISIS)")
         if nxt == 6:
             state["departure_days_left"] = None  # 성공 엔딩 stayed 는 첫 아침·조연 마무리 뒤 _side_finale 이 정함
-            state["crisis"] = "done"
+            state["crisis"], state["rift_sorry"] = "done", False
 
     # ---------- 요약 ----------
     def _maybe_summarize(self, sid: str, state: dict) -> None:

@@ -69,6 +69,8 @@ POSE_REQUEST = re.compile(r"^\s*(.+?)\s*해\s*줄래\s*\??\s*$")  # 앱 48 포�
 HISTORY_MESSAGES = 80       # 대화 호출에 넣을 최근 기록 (40턴 = 유저 40 + 서아 40, S3)
 PROMISES_MAX = 5            # S3: 서아가 한 약속·제안은 최근 이만큼
 MEMO_MAX_LEN = 200          # S3: 단계 기록·약속 한 줄 길이 상한
+STAGE_NOTE_MIN_RECENT = 4   # S4-1: 단계 기록을 부탁하려면 그 단계 구간 대화가 이만큼(줄) 있어야 함. 모자라면 미룸
+STAGE_NOTE_RECENT_MAX = 24  # S4-1: 단계 기록용으로 판정에 넣는 대화 줄 수 상한(요약과 같음)
 FALLBACK = {"action": None, "dialogue": "…", "motion_id": None, "emotion": "평온", "location": None, "gift_moment": None}
 REPLY_SCHEMA = {  # Gemini 응답 스키마 (OUTPUT_FORMAT과 같은 모양)
     "type": "OBJECT",
@@ -217,7 +219,8 @@ def new_state() -> dict:
         "judge_soon": False,      # name_state 가 asked·refused 면 true: 앱이 다음 답마다 바로 판정
         "name_quiet": 0,          # S2-1: 이름 사건 뒤 무작위 사건을 쉬는 남은 유저 메시지 수
         "stage_notes": {},        # S3: 끝난 단계마다 한 문장 {"1": "…"} (본편만, 요약이 바뀌어도 그대로)
-        "stage_note_due": None,   # S3: 다음 판정에 한 문장을 부탁할 끝난 단계 번호
+        "stage_note_due": None,   # S3: 다음 판정에 한 문장을 부탁할 끝난 단계 번호 (S4-1: stage_note_queue 의 첫 단계, 호환용)
+        "stage_note_queue": [],   # S4-1: 아직 기록 못 한 끝난 단계 [{"stage", "after"(끝난 뒤 유저 메시지 수), "msgs"(그 단계 유저 메시지 수)}]
         "promises": [],           # S3: 서아가 한 제안·약속 최근 PROMISES_MAX 개 (본편만)
         "hint_due": None,         # S4: 다음 답장에 넣을 속마음 힌트 블록 이름. 다음 판정이 비움
         "stage_hints": 0,         # S4: 이 단계에서 낸 속마음 힌트 수 (최대 HINT_MAX)
@@ -383,7 +386,8 @@ def normalize_state(raw: dict | None) -> dict:
         due = int(state["stage_note_due"]) if state["stage_note_due"] is not None else None
     except (TypeError, ValueError):
         due = None
-    state["stage_note_due"] = due if due in STAGE_NAMES else None
+    state["stage_note_queue"] = _note_queue(state["stage_note_queue"], due, state)
+    state["stage_note_due"] = state["stage_note_queue"][0]["stage"] if state["stage_note_queue"] else None
     promises = state["promises"] if isinstance(state["promises"], list) else []
     state["promises"] = [x.strip()[:MEMO_MAX_LEN] for x in promises if isinstance(x, str) and x.strip()][-PROMISES_MAX:]
     if state["hint_due"] not in HINT_BLOCKS or state["episode"]:
@@ -392,6 +396,24 @@ def normalize_state(raw: dict | None) -> dict:
     if not isinstance(state["used_events"], dict):
         state["used_events"] = {}
     return state
+
+
+def _note_queue(raw, due: int | None, state: dict) -> list[dict]:
+    """S4-1 단계 기록 요청 목록. 단계마다 한 번, 이미 기록이 있는 단계는 뺌(덮어쓰지 않음).
+    예전 모양(stage_note_due 하나만)이면 그 단계를 「지금 단계에 들어온 뒤 메시지 수」로 채워 넣음."""
+    out: list[dict] = []
+    for e in raw if isinstance(raw, list) else []:
+        if not isinstance(e, dict):
+            continue
+        try:
+            stage, after, msgs = int(e.get("stage")), int(e.get("after") or 0), int(e.get("msgs") or 0)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= stage <= 5 and str(stage) not in state["stage_notes"] and all(x["stage"] != stage for x in out):
+            out.append({"stage": stage, "after": max(0, after), "msgs": max(0, msgs)})
+    if due in STAGE_NAMES and str(due) not in state["stage_notes"] and all(x["stage"] != due for x in out):
+        out.insert(0, {"stage": due, "after": state["stage_user_msgs"], "msgs": 0})
+    return out[:5]
 
 
 def allowed_locations(state: dict) -> list[str]:
@@ -624,13 +646,18 @@ class Engine:
         msgs = [m for m in lines if m != NEXT_NIGHT]  # S4-C: 「[다음 밤]」은 유저의 말이 아님
         next_night = len(msgs) < len(lines) and not state["episode"]
         real_user = "\n".join(msgs)
+        note_req = None  # S4-1: 이번 판정에서 부탁하는 단계 기록 (단계, 대화)
         if next_night and not msgs and not need_summary:  # 판정할 말이 없음: 호출하지 않음
             judge = {"affection_delta": 0, "flags": [], "time_advance": False, "time_of_day": "", "summary": "",
                      "stage_note": "", "promise": "", "reason": "다음 밤"}
         else:
             notes = [] if state["episode"] else self._judge_notes(state, len(msgs))
+            if not state["episode"]:
+                for e in state["stage_note_queue"]:  # 이번 묶음은 그 단계가 끝난 뒤의 메시지
+                    e["after"] += len(msgs)
+                note_req = self._note_request(state, recent or [])
             judge = self._judge(state, real_user if next_night else last_user, last_reply, need_summary, recent or [],
-                                notes=notes)
+                                notes=notes, note=note_req)
         if next_night:  # 날짜는 밤 넘기기가 정함. 「[다음 밤]」만 왔으면 호감·플래그 0
             judge.update(time_advance=False, time_of_day="")
             if not msgs:
@@ -645,7 +672,7 @@ class Engine:
             state["hint_due"] = None  # S4: 앞 판정이 정한 힌트는 그 사이 답장에 나갔음
             state["won_line"], state["rewind_offer"] = None, False  # S4: 한 번만
             self._tick_scene(state, len(msgs), fallback, changes)  # 단계 조건이 갈래 장면 「마침」을 보므로 단계 판단보다 먼저
-            changes += self._remember(state, judge)
+            changes += self._remember(state, judge, note_req[0] if note_req else None)
         # S4-1: 이름 거절에 대한 사과(사과를 기다리던 중의 apologize)는 관계 위기 사과로 세지 않음
         name_sorry = bool(state["user_name"]) and state["name_state"] == "refused" and "apologize" in judge["flags"]
         changes += self._apply(state, judge, None, last_reply)
@@ -658,8 +685,8 @@ class Engine:
                     self._next_night(state, changes, f"「{NEXT_NIGHT}」 없이 메시지 {state['night_wait']}개")
         if not state["episode"] and stage_before == 5:
             self._crisis(state, judge, last_reply, len(msgs), changes, fallback, name_sorry)
-        if not state["episode"] and state["stage"] != stage_before:
-            state["stage_note_due"] = stage_before  # S3: 끝난 단계. 다음 판정에 한 문장을 부탁함
+        if not state["episode"]:  # S3·S4-1: 끝난 단계(정상으로 오른 때만, _advance 가 목록에 넣음)
+            state["stage_note_due"] = state["stage_note_queue"][0]["stage"] if state["stage_note_queue"] else None
         if not state["episode"]:
             need = MIN_STAGE_MSGS.get(state["stage"], 0)
             progress = {
@@ -1218,8 +1245,34 @@ class Engine:
             line += " (서아가 이름으로 부르고 싶다고 물어본 참)"
         return line
 
+    @staticmethod
+    def _note_request(state: dict, recent: list[dict]) -> tuple[int, str] | None:
+        """S4-1: 기록 못 한 끝난 단계 중, 받은 recent 에 그 단계 구간이 충분히 남은 첫 단계와 그 구간 대화.
+        구간 = 그 단계가 끝난 뒤의 유저 메시지(after)를 뒤에서 잘라 내고, 그 단계 유저 메시지 수(msgs)만큼 앞에서 자름.
+        모자라면 None(지어내지 않고 미룸). need_summary 와 상관없음."""
+        rows = [m for m in recent if m.get("r") in ("u", "c") and str(m.get("t") or "").strip()
+                and str(m.get("t")).strip() != NEXT_NIGHT]
+        for e in state.get("stage_note_queue") or []:
+            users = [i for i, m in enumerate(rows) if m["r"] == "u"]
+            part = rows
+            if e["after"]:
+                if len(users) < e["after"]:
+                    continue
+                part = rows[:users[-e["after"]]]
+            if e["msgs"]:
+                pu = [i for i, m in enumerate(part) if m["r"] == "u"]
+                if len(pu) > e["msgs"]:
+                    part = part[pu[-e["msgs"]]:]
+            part = part[-STAGE_NOTE_RECENT_MAX:]
+            if len(part) < STAGE_NOTE_MIN_RECENT:
+                continue
+            convo = "\n".join(f"{'유저' if m['r'] == 'u' else '서아'}: {m['t']}" for m in part)
+            return e["stage"], convo
+        return None
+
     def _judge(self, state: dict, user_message: str, reply: str,
-               need_summary: bool = False, recent: list[dict] | None = None, notes: list[str] | None = None) -> dict:
+               need_summary: bool = False, recent: list[dict] | None = None, notes: list[str] | None = None,
+               note: tuple[int, str] | None = None) -> dict:
         prompt = (
             f"[현재 상태]\n단계: {state['stage']} ({state['episode_stage_name'] or STAGE_NAMES[state['stage']]}), "
             f"호감도: {state['affection']}, {state['day']}일째 {state['time_of_day']}, "
@@ -1233,9 +1286,10 @@ class Engine:
                 for m in (recent or [])[-24:] if m.get("r") in ("u", "c")
             )
             prompt += f"\n\n[요약 요청]\n기존 요약과 아래 최근 대화를 합쳐 summary를 채운다.\n[최근 대화]\n{convo or '없음'}"
-        due = None if state["episode"] else state.get("stage_note_due")
-        if due:  # S3: 끝난 단계를 한 문장으로
-            prompt += f"\n\n[단계 기록 요청] {due}단계({STAGE_NAMES[due]})를 한 문장으로"
+        due = None if state["episode"] or not note else note[0]
+        if due:  # S3: 끝난 단계를 한 문장으로 (S4-1: 받은 recent 의 그 단계 구간만 보고)
+            prompt += (f"\n\n[단계 기록 요청] {due}단계({STAGE_NAMES[due]})를 아래 [단계 기록용 대화]만 보고 한 문장으로. "
+                       f"그 단계가 끝난 뒤에 일어난 일은 넣지 않는다.\n[단계 기록용 대화]\n{note[1]}")
         for note in notes or []:  # S4-1 위기·엇갈림 판정 지시
             prompt += f"\n\n{note}"
         prompt += f"\n\n[유저]\n{user_message}\n\n[서아]\n{reply}"
@@ -1266,13 +1320,15 @@ class Engine:
 
     # ---------- 상태 갱신 ----------
     @staticmethod
-    def _remember(state: dict, judge: dict) -> list[str]:
-        """S3 기억(본편만): 부탁한 단계 기록을 stage_notes 에, 서아의 약속·제안을 promises 에."""
+    def _remember(state: dict, judge: dict, due: int | None = None) -> list[str]:
+        """S3 기억(본편만): 부탁한 단계 기록을 stage_notes 에, 서아의 약속·제안을 promises 에.
+        S4-1: 이번 판정에서 부탁한 단계(due)만 저장하고 목록에서 뺌. 비거나 실패하면 목록에 남아 다음에 다시."""
         changes = []
-        due, note = state.get("stage_note_due"), (judge.get("stage_note") or "")[:MEMO_MAX_LEN]
+        note = (judge.get("stage_note") or "")[:MEMO_MAX_LEN]
         if due and note:
-            state["stage_notes"][str(due)] = note  # 이미 있으면 덮어씀
-            state["stage_note_due"] = None
+            state["stage_notes"][str(due)] = note
+            state["stage_note_queue"] = [e for e in state["stage_note_queue"] if e["stage"] != due]
+            state["stage_note_due"] = state["stage_note_queue"][0]["stage"] if state["stage_note_queue"] else None
             changes.append(f"{due}단계 기록 저장")
         promise = (judge.get("promise") or "")[:MEMO_MAX_LEN]
         if promise and promise not in state["promises"]:
@@ -1407,6 +1463,11 @@ class Engine:
 
     @staticmethod
     def _advance(state: dict, nxt: int, changes: list[str]) -> None:
+        old, queue = state["stage"], state.setdefault("stage_note_queue", [])
+        if (not state.get("episode") and str(old) not in state.get("stage_notes", {})
+                and all(e["stage"] != old for e in queue)):  # S4-1: 정상으로 마친 단계만 기록 요청(하락·이름 흐름은 아님)
+            queue.append({"stage": old, "after": 0, "msgs": state.get("stage_user_msgs", 0)})
+            state["stage_note_due"] = queue[0]["stage"]
         state["stage"] = nxt
         state["stage_flags"] = []
         state["stage_bonus"], state["stage_user_msgs"] = 0, 0  # 단계마다 새로 셈

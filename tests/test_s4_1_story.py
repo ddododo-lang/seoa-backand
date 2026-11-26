@@ -308,6 +308,122 @@ class WonLineTest(unittest.TestCase):  # B3
         self.assertIn("매일 온 거, 술 때문 아니었어.", system_for(st))
 
 
+class NoteStub(Stub):
+    """판정 입력을 모두 남기고, 단계 기록을 정해 두는 Stub."""
+
+    def __init__(self, note="", **verdict):
+        super().__init__(dict(verdict, stage_note=note))
+        self.prompts = []
+
+    def complete(self, system, prompt, json_mode=False, budget_sec=None):
+        self.prompts.append(prompt)
+        return super().complete(system, prompt, json_mode, budget_sec)
+
+
+def talk(n, tag):
+    """유저·서아 n 턴 대화 기록."""
+    out = []
+    for i in range(n):
+        out += [{"r": "u", "t": f"{tag} 유저{i}"}, {"r": "c", "t": f"{tag} 서아{i}"}]
+    return out
+
+
+class StageNoteTest(unittest.TestCase):  # C1·C2
+    def test_note_without_need_summary_uses_recent_slice(self):
+        st = normalize_state({"stage": 2, "stage_user_msgs": 2, "stage_note_queue": [{"stage": 1, "after": 2, "msgs": 3}]})
+        llm = NoteStub("서아가 손을 맡겼다.")
+        recent = talk(3, "경계") + talk(3, "티키")
+        r = engine(llm).judge(st, "티키 유저2", REPLY, need_summary=False, recent=recent)
+        part = llm.prompts[0].split("[단계 기록용 대화]\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("경계 유저0", part)
+        self.assertNotIn("티키", part)  # 다음 단계 대화는 넣지 않음
+        self.assertNotIn("[요약 요청]", llm.prompts[0])
+        self.assertEqual((r["state"]["stage_notes"], r["state"]["stage_note_due"], r["state"]["stage_note_queue"]),
+                         ({"1": "서아가 손을 맡겼다."}, None, []))
+
+    def test_short_recent_defers(self):
+        st = normalize_state({"stage": 2, "stage_user_msgs": 1, "stage_note_queue": [{"stage": 1, "after": 0, "msgs": 3}]})
+        for recent in ([], talk(1, "경계")[:1] + talk(2, "티키")):
+            llm = NoteStub("지어낸 기록")
+            r = engine(llm).judge(st, "응", REPLY, recent=recent)
+            self.assertNotIn("[단계 기록 요청]", llm.prompts[0])
+            self.assertEqual((r["state"]["stage_notes"], r["state"]["stage_note_due"]), ({}, 1))
+
+    def test_rapid_up_down_keeps_requests(self):
+        st = normalize_state({"stage": 2, "stage_user_msgs": 9})
+        Engine._advance(st, 3, [])  # 2 마침
+        st["name_state"], st["user_name"] = "accepted", "도윤"
+        Engine._set_stage(st, 2)  # 이름 거절로 내려감: 3은 마친 것이 아님
+        self.assertEqual([e["stage"] for e in st["stage_note_queue"]], [2])
+        Engine._set_stage(st, 3)  # 사과로 다시 3
+        st["stage_user_msgs"] = 9
+        Engine._advance(st, 4, [])  # 3 마침
+        self.assertEqual(([e["stage"] for e in st["stage_note_queue"]], st["stage_note_due"]), ([2, 3], 2))
+        st = normalize_state(st)  # 앱이 돌려보내도 그대로
+        self.assertEqual([e["stage"] for e in st["stage_note_queue"]], [2, 3])
+        r = engine(NoteStub("")).judge(st, "응", REPLY, recent=talk(20, "x"))  # 기록이 비면 남음
+        self.assertEqual([e["stage"] for e in r["state"]["stage_note_queue"]], [2, 3])
+        r = engine(NoteStub("2단계 기록")).judge(r["state"], "응", REPLY, recent=talk(20, "x"))
+        self.assertEqual((r["state"]["stage_note_due"], r["state"]["stage_notes"]), (3, {"2": "2단계 기록"}))
+        r = engine(NoteStub("3단계 기록")).judge(r["state"], "응", REPLY, recent=talk(20, "x"))
+        self.assertEqual((r["state"]["stage_note_due"], sorted(r["state"]["stage_notes"])), (None, ["2", "3"]))
+
+    def test_drop_is_not_completion_and_no_overwrite(self):
+        st = {"stage": 3, "affection": 45, "user_name": "도윤", "name_state": "accepted", "stage_notes": {"2": "옛 기록"}}
+        r = judge(st, "부르지 마", flags=["refuse_name"])
+        self.assertEqual((r["state"]["stage"], r["state"]["stage_note_queue"]), (2, []))
+        st = normalize_state({"stage": 2, "stage_user_msgs": 9, "stage_notes": {"2": "옛 기록"}})
+        Engine._advance(st, 3, [])
+        self.assertEqual(st["stage_note_queue"], [])  # 이미 기록이 있는 단계는 다시 부탁하지 않음
+
+    def test_legacy_due_and_episode(self):
+        st = normalize_state({"stage": 3, "stage_user_msgs": 4, "stage_note_due": 2})
+        self.assertEqual(st["stage_note_queue"], [{"stage": 2, "after": 4, "msgs": 0}])
+        self.assertEqual(normalize_state({"stage_note_queue": "x", "stage_note_due": None})["stage_note_queue"], [])
+        xmas = {"stage": 3, "episode": "s2", "episode_stage": 2, "location": "크리스마스 거리",
+                "stage_note_queue": [{"stage": 2, "after": 0, "msgs": 3}]}
+        llm = NoteStub("x")
+        r = engine(llm).judge(xmas, "응", REPLY, recent=talk(10, "x"))
+        self.assertNotIn("[단계 기록 요청]", llm.prompts[0])
+        self.assertEqual(r["state"]["stage_note_queue"], [{"stage": 2, "after": 0, "msgs": 3}])  # 본편 값은 보관만
+
+
+class StabilityTest(unittest.TestCase):  # C4
+    def test_next_night_changes_nothing_else(self):
+        st = {"stage": 5, "affection": 40, "crisis": "rift", "route": "care", "night_next": "RIFT_NIGHT", "turn": 30,
+              "used_events": {"CRISIS": 5, "RIFT_START": 12}, "stage_user_msgs": 7, "short_streak": 1,
+              "stage_flags": ["care"], "day": 4}
+        r = engine(Stub({"affection_delta": 9, "flags": ["sincere"]})).judge(st, "[다음 밤]", REPLY)
+        s = r["state"]
+        self.assertEqual((s["affection"], s["stage_user_msgs"], s["crisis_msgs"], s["short_streak"], s["stage_flags"]),
+                         (40, 7, 0, 1, ["care"]))
+        self.assertEqual((s["day"], s["night_next"]), (7, None))
+        s2 = engine(Stub()).judge(s, "[다음 밤]", REPLY)["state"]  # 같은 「[다음 밤]」이 또 와도
+        self.assertEqual((s2["day"], s2["crisis_msgs"]), (7, 0))
+
+    def test_old_departed_save_and_no_countdown(self):
+        st = normalize_state({"stage": 5, "ending": "departed", "departure_days_left": 0})
+        self.assertEqual((st["ending"], st["departure_days_left"]), ("departed", None))
+        self.assertIsNone(judge(dict(st, short_streak=9))["pending_event"])
+        st = crisis_start()
+        for _ in range(4):
+            r, st = step(st, time_advance=True)
+            self.assertIsNone(st["ending"])
+            self.assertIsNone(st["departure_days_left"])
+            self.assertNotIn(r["pending_event"], ("DEPARTURE", "DAYS_LEFT_2", "DAYS_LEFT_1", "LAST_NIGHT"))
+
+    def test_xmas_unchanged(self):
+        xmas = {"stage": 2, "episode": "s2", "episode_stage": 5, "episode_stage_name": "엇갈림",
+                "location": "크리스마스 거리", "route": None}
+        r = judge(xmas, "가지 마", flags=["sincere", "outside"], affection_delta=5)
+        s = r["state"]
+        self.assertEqual((s["stage"], s["route"], s["scene"], s["crisis"], r["pending_event"]), (2, None, None, "none", None))
+        system = system_for(dict(xmas, pending_event="DATE"))
+        self.assertIn("크리스마스 이브", system)
+        self.assertNotIn("바에서 다시 출발하지 않는다", system)
+        self.assertNotIn("[위기 판정]", system)
+
+
 class LoversTest(unittest.TestCase):  # B4 (연인 단계 사건)
     def test_no_fake_lover_in_stage6(self):
         self.assertNotIn("DATE", STAGE_EVENTS[6])

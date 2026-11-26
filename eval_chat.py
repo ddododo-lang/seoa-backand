@@ -299,21 +299,22 @@ JUDGE_SCENARIOS = {
     "bonus_short": {"state": {"stage": 2, "affection": 20}, "steps": ["응\n뭐해?\nㅋㅋ"], "want": "bonus0"},
     "bonus_long": {"state": {"stage": 2, "affection": 20}, "steps": ["\n".join(LONG)], "want": "bonus2"},
     "bonus_repeat": {"state": {"stage": 2, "affection": 20}, "steps": ["\n".join([LONG[0]] * 3)], "want": "bonus0"},
-    "min_msgs": {  # 2단계: 호감 40·outside 가 차도 메시지 14개면 안 오르고, 15개째에 오름
-        "state": {"stage": 2, "affection": 45, "stage_flags": ["outside"], "stage_user_msgs": 13},
+    "min_msgs": {  # 2단계(S4-1): 갈래 장면을 마치고 호감이 차도 메시지 8개면 안 오르고, 9개째에 오름
+        "state": {"stage": 2, "affection": 45, "stage_flags": ["outside"], "stage_user_msgs": 7, "route": "care",
+                  "used_events": {"NIGHT_END_2": 0, "ROUTE_WALK_HOME": 1}},
         "steps": ["오늘 같이 걸어서 좋았어.", "다음에도 같이 나가자."], "want": "up_on_second",
     },
-    "day_marker": {  # 5단계 하루 넘김 → 남은 날 지문
+    "day_marker": {  # S4-1: 5단계(위기)에서 하루가 넘어가도 남은 날 지문·카운트다운 없음
         "state": {"stage": 5, "affection": 80, "day": 10, "route": "care", "departure_days_left": 3},
-        "steps": ["(밤이 지나고 다음 날 아침, 바 문을 연다)"], "want": "marker",
+        "steps": ["(밤이 지나고 다음 날 아침, 바 문을 연다)"], "want": "no_marker",
     },
     "stayed_15": {  # 6단계 메시지 15개 → 조연 마무리 없이 stayed
         "state": {"stage": 6, "affection": 96, "day": 15, "route": "tease", "mari_step": 2, "stage_user_msgs": 13},
         "steps": ["좋아.\n오늘은 같이 문 닫자."], "want": "stayed",
     },
-    "departed": {  # 사흘 뒤 pursue 없음 → ending departed
+    "departed": {  # S4-1: 예전 남은 하루 저장도 떠남 실패 엔딩 없음(위기 → 엇갈림 → 화해)
         "state": {"stage": 5, "affection": 80, "day": 12, "route": "care", "departure_days_left": 1},
-        "steps": ["(밤이 지나고 다음 날 아침이 됐다. 창가 자리는 비어 있다)"], "want": "departed",
+        "steps": ["(밤이 지나고 다음 날 아침이 됐다. 창가 자리는 비어 있다)"], "want": "no_ending",
     },
 }
 MORNING_TEASE = "*서아가 먼저 깨 있다. 당신 셔츠를 입고, 커피를 엉망으로 내리는 중이다.* 셔츠, 빌렸어. 돌려줄 생각은 없고."
@@ -545,16 +546,21 @@ def run_judge_scenario(engine, sc) -> list[str]:
             out.append(f"{'✅' if good else '❌'} 보너스 +{pg.get('talk_bonus')} (기대 +{n}{', 판정 플래그가 없으면 +1' if n == 2 else ''})")
         elif want == "up_on_second":
             if i == 0:
-                out.append(f"{'❌ 14개인데 오름' if r['stage_up'] else '✅ 14개면 안 오름'}")
+                out.append(f"{'❌ 최소 수 전인데 오름' if r['stage_up'] else '✅ 최소 수 전이면 안 오름'}")
             else:
-                out.append(f"{'✅ 15개째 오름' if r['stage_up'] else '❌ 15개인데 안 오름'}"
-                           f"{'' if st['affection'] >= 40 else ' (호감이 40 아래로 떨어짐: 판정 탓)'}")
+                out.append(f"{'✅ 최소 수에 오름' if r['stage_up'] else '❌ 최소 수인데 안 오름'}"
+                           f"{'' if st['affection'] >= 25 else ' (호감이 25 아래로 떨어짐: 판정 탓)'}")
         elif want == "marker":
             if r["pending_event"] and r["pending_event"].startswith("DAYS_LEFT"):
                 reply = engine.reply(st, "…왔네.", [{"r": "c", "t": DEPART_LINE}], [])
                 out.append(f"✅ 남은 날 지문: {reply['action']}")
             else:
                 out.append(f"❌ 하루가 안 넘어감(판정 time_advance {r['judge'].get('time_advance')})")
+        elif want == "no_marker":  # S4-1
+            bad = r["pending_event"] and r["pending_event"].startswith(("DAYS_LEFT", "LAST_NIGHT", "DEPARTURE"))
+            out.append(f"{'❌ 남은 날 사건 ' + r['pending_event'] if bad else '✅ 남은 날 사건 없음'}")
+        elif want == "no_ending":  # S4-1
+            out.append(f"{'✅' if st['ending'] is None else '❌'} 엔딩 {st['ending']} (기대 없음)")
         elif want in ("departed", "stayed"):
             out.append(f"{'✅' if st['ending'] == want else '❌'} 엔딩 {st['ending']} (기대 {want})")
         state = dict(st, pending_event=None)

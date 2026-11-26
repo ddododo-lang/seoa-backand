@@ -136,7 +136,7 @@ NIGHT_END_STAGES = (2, 3)
 NIGHT_END_AFTER = 5         # 그 단계 유저 메시지(상징 장면을 받은 메시지 + 그 뒤 4개)
 NIGHT_WAIT_MAX = 6          # 예전 앱처럼 「[다음 밤]」이 안 오면 유저 메시지 이만큼 뒤 서버가 밤을 넘김(첫마디 없이)
 NIGHT_LOCATION = "바 '라스트 오더' 1층"
-WON_KEYS = {"WON_TEASE": "연기아니지", "WON_CARE": "내려가자", "WON_RECONCILE": "늦었잖아"}  # 판정한 답장에 이 원고 대사가 있으면 다시 넣지 않음
+WON_KEYS = {"WON_TEASE": "연기아니지", "WON_CARE": "내려가자", "WON_RECONCILE": "늦었잖아"}  # won_line 에 올 수 있는 블록 이름(S4-1-1: 「이미 나왔나」는 WON_SHOWN 으로 봄)
 # S4-1: 판정한 답장에 성공 대사가 통째로 나왔으면(공백 빼고 모두 있음) 판정 flags 가 비어도 마음을 확인한 것으로 봄
 WON_SHOWN = {"WON_TEASE": ("연기아니지",), "WON_CARE": ("내려가자", "같이"), "WON_RECONCILE": ("늦었잖아", "왔으니까")}
 CRISIS_JUDGE_NOTE = ("[위기 판정] 서아가 새벽에 떠난다는 소식을 꺼낸 뒤다. 유저가 진심을 말하거나, 가지 말라고 붙잡거나, "
@@ -144,7 +144,9 @@ CRISIS_JUDGE_NOTE = ("[위기 판정] 서아가 새벽에 떠난다는 소식을
                      "단순한 장난이나 짧은 맞장구만으로는 넣지 않는다.")
 CRISIS_FIRST_NOTE = "첫 번째 유저 메시지는 서아가 소식을 꺼내기 전의 말이다. sincere·pursue 는 그 뒤 메시지만 보고 정한다."
 RIFT_JUDGE_NOTE = ("[엇갈림 판정] 위기에서 엇갈려 서아가 거리를 두고 있다. 관계에 대한 사과는 apologize, 진심은 sincere. "
-                   "앞서 한 사과·진심을 거두거나 관계 회복을 거부하면 withdraw.")
+                   "앞서 한 사과·진심을 명확하게 철회하거나 관계 회복 의사를 명확하게 거부하면 withdraw. "
+                   "단순한 투덜거림, 서운함, 장난, 망설임, 추가 설명 요구는 withdraw 가 아니다. "
+                   "같은 메시지에 사과와 명확한 관계 회복 거부가 함께 있으면 withdraw 를 넣는다.")
 GIFT_MOMENT_GAP = 10       # 같은 순간 선물은 준 뒤 유저 메시지 이만큼 지나야 다시 엶
 FIRST_NIGHT_TURNS = 3     # 첫날 밤 사정(손등의 피)은 유저 메시지 이만큼까지만 넣음. 그 뒤엔 같은 묘사가 반복되지 않게 뺌
 GIFT_MOMENT_QUIET = 3      # 순간 선물을 준 뒤 이만큼은 어떤 순간 선물도 열지 않음(자주 넣지 않기)
@@ -638,8 +640,9 @@ class Engine:
 
     # ---------- 상태 없는 방식: 판정 ----------
     def judge(self, state: dict, last_user: str, last_reply: str,
-              need_summary: bool = False, recent: list[dict] | None = None) -> dict:
-        """판정 호출 → 규칙 적용 → 다음 턴 사건 결정. 갱신된 state를 돌려준다."""
+              need_summary: bool = False, recent: list[dict] | None = None, reply_ok=None) -> dict:
+        """판정 호출 → 규칙 적용 → 다음 턴 사건 결정. 갱신된 state를 돌려준다.
+        reply_ok (S4-1-1, 선택): last_user 메시지마다 서아 답장이 정상으로 나갔는지 [true, false, …]. 없거나 길이가 다르면 예전 방식."""
         state = normalize_state(state)
         stage_before = state["stage"]
         lines = [m.strip() for m in (last_user or "").split("\n") if m.strip()]
@@ -671,7 +674,10 @@ class Engine:
             state["stage_user_msgs"] += len(msgs)
             state["hint_due"] = None  # S4: 앞 판정이 정한 힌트는 그 사이 답장에 나갔음
             state["won_line"], state["rewind_offer"] = None, False  # S4: 한 번만
-            self._tick_scene(state, len(msgs), fallback, changes)  # 단계 조건이 갈래 장면 「마침」을 보므로 단계 판단보다 먼저
+            ok = self._ok_replies(lines, msgs, reply_ok)
+            if ok is None:  # 예전 앱: 묶음 수에서 판정한 마지막 답장이 예비 지문이면 하나 뺌
+                ok = max(0, len(msgs) - (1 if fallback else 0))
+            self._tick_scene(state, ok, changes)  # 단계 조건이 갈래 장면 「마침」을 보므로 단계 판단보다 먼저
             changes += self._remember(state, judge, note_req[0] if note_req else None)
         # S4-1: 이름 거절에 대한 사과(사과를 기다리던 중의 apologize)는 관계 위기 사과로 세지 않음
         name_sorry = bool(state["user_name"]) and state["name_state"] == "refused" and "apologize" in judge["flags"]
@@ -901,13 +907,25 @@ class Engine:
         return 0
 
     @staticmethod
-    def _tick_scene(state: dict, n_msgs: int, fallback: bool, changes: list[str]) -> None:
-        """S4-1: 열린 갈래 장면에서 정상으로 나간 답장을 센다(이번 묶음 메시지 수, 판정한 답장이 예비 지문이면 하나 뺌).
-        시작 답장 + 그 뒤 유저 메시지 3개(SCENE_REPLIES_DONE)가 지나면 마침. 예약만 된 장면(앱이 아직 사건 답장을 내지 않음)은 세지 않음."""
+    def _ok_replies(lines: list[str], msgs: list[str], reply_ok) -> int | None:
+        """S4-1-1: reply_ok 가 메시지 수(「[다음 밤]」 뺀 것 또는 포함한 것)와 길이가 같은 bool 배열이면 정상 답장 수.
+        「[다음 밤]」 자리의 값은 세지 않음. 아니면 None(예전 계산)."""
+        if not isinstance(reply_ok, list) or not all(isinstance(x, bool) for x in reply_ok):
+            return None
+        if len(reply_ok) == len(lines) and len(lines) != len(msgs):
+            reply_ok = [ok for line, ok in zip(lines, reply_ok) if line != NEXT_NIGHT]
+        if len(reply_ok) != len(msgs):
+            return None
+        return sum(reply_ok)
+
+    @staticmethod
+    def _tick_scene(state: dict, ok_replies: int, changes: list[str]) -> None:
+        """S4-1: 열린 갈래 장면에서 정상으로 나간 서아 답장을 센다(S4-1-1: reply_ok 의 true 수, 없으면 예전 계산).
+        시작 답장 + 그 뒤 정상 답장 3개(SCENE_REPLIES_DONE)면 마침. 예약만 된 장면(앱이 아직 사건 답장을 내지 않음)은 세지 않음."""
         scene = state["scene"]
         if not scene or state["pending_event"] == scene:
             return
-        state["scene_msgs"] += max(0, n_msgs - (1 if fallback else 0))
+        state["scene_msgs"] += max(0, ok_replies)
         if state["scene_msgs"] >= SCENE_REPLIES_DONE:
             state["scene"], state["scene_judges_left"], state["scene_msgs"] = None, 0, 0
             changes.append(f"갈래 장면 마침: {scene}")
@@ -1046,7 +1064,11 @@ class Engine:
             state["pending_event"], used["RECONCILE_OPEN"] = "RECONCILE_OPEN", turn
             changes.append("화해의 문 답장이 예비 지문 → 다음 답장에 다시")
             return
-        sorry = "withdraw" not in flags and (bool(flags & {"apologize", "sincere"}) or state["rift_sorry"])
+        if after and "withdraw" in flags:  # S4-1-1: 명확한 거부가 성공 대사·사과·진심·기억한 사과보다 우선
+            changes.append("엇갈림: 회복 거부(withdraw) → 화해 안 함, 엇갈림 유지"
+                           + (" (성공 대사가 나왔지만 거부 우선)" if self._won_shown("WON_RECONCILE", shown) else ""))
+            return
+        sorry = bool(flags & {"apologize", "sincere"}) or state["rift_sorry"]
         if after and (sorry or self._won_shown("WON_RECONCILE", shown)):
             state["affection"] = max(state["affection"], RECONCILE_MIN_AFFECTION)
             why = "엇갈림에서 화해" + ("" if flags & {"apologize", "sincere"} else " (앞서 받은 사과·진심)")
@@ -1097,7 +1119,7 @@ class Engine:
     def _won(self, state: dict, won: str, shown: str, changes: list[str], why: str) -> None:
         """마음 확인 → 6단계. 성공 대사가 판정한 답장에 없었으면 다음 답장(STAGE_UP_6) 앞에 넣음."""
         state["crisis"] = "done"
-        state["won_line"] = None if WON_KEYS[won] in shown else won
+        state["won_line"] = None if self._won_shown(won, shown) else won  # S4-1-1: 성공 판단과 같은 기준(WON_SHOWN)
         changes.append(f"{why} → 6단계" + ("" if state["won_line"] else " (성공 대사가 이번 답장에 이미 나옴)"))
         self._advance(state, 6, changes)
 

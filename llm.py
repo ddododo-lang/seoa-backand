@@ -84,8 +84,11 @@ def _failure_kind(e: Exception) -> tuple[str, str] | None:
 
 
 class GeminiLLM:
-    def __init__(self, client=None, sleep=time.sleep, clock=time.monotonic):
+    def __init__(self, client=None, sleep=time.sleep, clock=time.monotonic, usage=None):
         from google.genai import types
+        from usage import USAGE
+
+        self.usage = usage or USAGE  # 호출마다 토큰 수를 기록 (usage.py, GET /usage)
 
         if client is None:
             from google import genai  # 설치: pip install google-genai
@@ -121,7 +124,7 @@ class GeminiLLM:
             return ""
 
     def _generate(self, kind: str, models: list[str], contents, config: dict,
-                  budget_sec: float | None = None):
+                  budget_sec: float | None = None, usage_kind: str | None = None):
         """models 순서대로 시도해서 첫 응답을 돌려준다. 모두 실패하면 LLMUnavailable."""
         from google.genai import types
 
@@ -166,14 +169,25 @@ class GeminiLLM:
                     self.stats[f"{kind}_fallover"] += 1
                 note = f" (넘김: {'; '.join(failures)})" if failures else ""
                 log.info("[llm] %s 응답 모델=%s %.1f초%s", kind, model, sec, note)
+                self._record_usage(usage_kind or kind, model, response)
                 return response
             if deadline - self._clock() < 0.5:
                 break
         self.stats[f"{kind}_unavailable"] += 1
         self.last_model[kind] = None
+        try:
+            self.usage.record_failure(usage_kind or kind)
+        except Exception:  # 기록이 실패해도 대화는 계속
+            log.exception("[usage] 기록 실패")
         sec = self._clock() - start
         log.warning("[llm] %s 모든 모델 실패 %.1f초: %s", kind, sec, "; ".join(failures) or "시간 부족")
         raise LLMUnavailable(f"{kind}: " + ("; ".join(failures) or "시간 부족"))
+
+    def _record_usage(self, kind: str, model: str, response) -> None:
+        try:
+            self.usage.record(kind, model, getattr(response, "usage_metadata", None))
+        except Exception:  # 기록이 실패해도 대화는 계속
+            log.exception("[usage] 기록 실패")
 
     @staticmethod
     def _contents(messages: list[dict]):
@@ -217,7 +231,7 @@ class GeminiLLM:
             temperature=0.2,
             max_output_tokens=2048,
             response_mime_type="application/json" if json_mode else None,
-        ), budget_sec)
+        ), budget_sec, usage_kind="judge" if json_mode else "summary")  # 판정은 JSON, 요약은 글
         return self._text(response)
 
 

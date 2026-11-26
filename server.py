@@ -5,6 +5,7 @@
 - POST /sessions/{id}/chat     메시지 보내기 → 서아의 응답
 - GET  /sessions/{id}          대화 기록 (DEBUG=1이면 상태도)
 - POST /chat, /judge           moti 프런트엔드용 (상태 없음, 앱이 상태를 보관)
+- GET  /usage                  Gemini 사용량 합계 (호출 수·토큰·예상 비용, 서버가 켜진 뒤부터)
 """
 import inspect
 import os
@@ -19,6 +20,7 @@ from pydantic import BaseModel, Field
 from db import Store
 from engine import Engine, to_text
 from llm import make_llm
+from usage import USAGE
 
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
@@ -155,6 +157,12 @@ def front_judge(body: JudgeIn):
     if DEBUG:
         response.update(judge=result["judge"], changes=result["changes"])
     return response
+
+
+@app.get("/usage")
+def usage():
+    """Gemini 사용량 합계. 숫자만 있고 키·대화 내용은 없다."""
+    return USAGE.report()
 
 
 @app.get("/sessions/{sid}")

@@ -83,6 +83,8 @@ def chat(sid: str, body: ChatIn):
 # 상태는 앱(localStorage)이 보관하고 매 요청에 보낸다. 서버는 아무것도 저장하지 않는다.
 #   POST /chat  : 서아 응답만 바로 만든다 → {action, dialogue, motion_id, emotion, location, reply}
 #                 reply는 예전 형식 "*action* dialogue" (action이 없으면 dialogue만)
+#                 S5: state 에 photo_ask_v=1 · photo_asks(목록)가 있으면 photo_ask(보통 null)도 붙는다
+#                     {"id": "photo_3"|"photo_6", "route", "pose", "face", "camera_face"}. 없으면 예전 응답 그대로
 #   POST /judge : 판정·단계 상승·사건 결정 → {state, stage_up, flags, pending_event}
 SUPPORTED_CHARS = {"seoa"}  # 지금은 서아만 연결. 다른 캐릭터는 404 → 프런트가 미리 써 둔 대사로 대답
 

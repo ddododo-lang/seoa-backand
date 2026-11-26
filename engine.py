@@ -13,7 +13,7 @@ import re
 import time
 
 from db import Store
-from llm import BUDGET_SEC, LLMUnavailable
+from llm import BUDGET_SEC, FALLBACK_REPLY, LLMUnavailable
 from prompt_loader import load_blocks, render
 
 # ---------- 게임 규칙 (여기서 조정) ----------
@@ -171,7 +171,19 @@ DAY_MARKERS = {
     "DAYS_LEFT_1": "서아가 떠나기까지, 하루.",
     "LAST_NIGHT": "오늘 밤이 지나면, 서아는 떠난다.",
 }
-SUMMARY_TRIGGER = 40        # 요약 안 된 메시지가 이만큼 쌓이면 요약
+# S5 사진 촬영 제안: 앱이 state.photo_ask_v=1 · photo_asks(이미 보여 준 id 목록)를 보낼 때만. 값은 서버가 정함
+PHOTO_ASK_V = 1
+PHOTO_IDS = ("photo_3", "photo_6")
+PHOTO_ASKS = {  # (id, 갈래) → (블록, 확정 대사, emotion, 응답 필드)
+    ("photo_3", "tease"): ("PHOTO_3_TEASE", "사장님, 이런 모습 아무한테나 안 보여 주는데. 사진 한 장 찍어 둘래?", "도발",
+                           {"pose": "p01", "face": "smirk", "camera_face": "wink"}),
+    ("photo_3", "care"): ("PHOTO_3_CARE", "…오늘은 좀 기억해 두고 싶어서. 사진 한 장만 찍어 줄래?", "설렘",
+                          {"pose": "p01", "face": "soft", "camera_face": "shy"}),
+    ("photo_6", None): ("PHOTO_6", "우리 사진 좀 더 남겨 두자. 앞으로 같이 있을 날도 많잖아.", "기쁨",
+                        {"pose": "p01", "face": "joy", "camera_face": "soft"}),
+}
+PHOTO_KEY_STRIP = re.compile(r"[\s「」\"“”'‘’.,!?~…·]")  # 확정 대사가 답장에 있는지 볼 때 공백·따옴표·문장부호는 빼고 비교
+SUMMARY_TRIGGER = 40       # 요약 안 된 메시지가 이만큼 쌓이면 요약
 KEEP_RECENT = 20            # 요약 후에도 원문으로 남겨 둘 최근 메시지 수
 
 SUMMARY_SYSTEM = (
@@ -237,6 +249,8 @@ def new_state() -> dict:
         "night_wait": 0,          # S4-C: night_next 를 정한 뒤 「[다음 밤]」 없이 온 유저 메시지 수
         "scene_msgs": 0,          # S4-1: 열린 갈래 장면에서 정상으로 나간 서아 답장 수(시작 답장 포함). SCENE_REPLIES_DONE 이면 마침
         "rift_sorry": False,      # S4-1: 엇갈림이 된 뒤 유효한 사과·진심을 받아 둠(화해의 문 뒤에 반영, withdraw 면 지움)
+        "photo_ask_v": 0,         # S5: 앱이 사진 제안을 지원하면 1 (앱이 보냄, 서버는 돌려보내기만)
+        "photo_asks": [],         # S5: 앱이 이미 보여 준 사진 제안 id (photo_3·photo_6). 앱이 기록, 서버는 돌려보내기만
     }
 
 
@@ -397,7 +411,16 @@ def normalize_state(raw: dict | None) -> dict:
     state["stage_flags"] = [f for f in state["stage_flags"] if f in ALLOWED_FLAGS - JUDGE_ONLY_FLAGS]
     if not isinstance(state["used_events"], dict):
         state["used_events"] = {}
+    state["photo_ask_v"] = PHOTO_ASK_V if type(raw.get("photo_ask_v")) is int and raw["photo_ask_v"] == PHOTO_ASK_V else 0
+    asks = raw.get("photo_asks") if isinstance(raw.get("photo_asks"), list) else []
+    state["photo_asks"] = [x for i, x in enumerate(asks) if x in PHOTO_IDS and x not in asks[:i]]
     return state
+
+
+def photo_supported(raw) -> bool:
+    """S5: 앱이 사진 제안을 지원한다고 알렸는지. photo_ask_v 가 정확히 1이고 photo_asks 가 목록일 때만(모양이 틀리면 예전 응답)."""
+    return (isinstance(raw, dict) and type(raw.get("photo_ask_v")) is int and raw["photo_ask_v"] == PHOTO_ASK_V
+            and isinstance(raw.get("photo_asks"), list))
 
 
 def _note_queue(raw, due: int | None, state: dict) -> list[dict]:
@@ -477,6 +500,7 @@ class Engine:
 
         history: [{"r": "u"|"c", "t": "..."}] 최근 기록. motion_list: [{"id", "name", "emo"}].
         """
+        photo_on = photo_supported(state)  # S5: 지원 신호가 없으면 photo_ask 필드도 넣지 않음(예전 응답 그대로)
         state = normalize_state(state)
         state["gift_moments"] = self._open_moments(state["gift_moments"], history, user_message)
         state["_xmas_late"] = self._xmas_late(state, history)
@@ -488,7 +512,11 @@ class Engine:
         if night:
             event = None
         state["_hint"] = None if event or night else self._hint_now(state["hint_due"], history)
+        pose_id = self._pose_request(user_message, motion_list)
+        photo = self._photo_due(state, event, night, user_message, history, pose_id) if photo_on else None
         system = self._build_system(state, event, motion_list)
+        if photo:  # S5: 사진 제안 지시는 맨 끝에 (다른 사건이 없는 답장만)
+            system += "\n\n" + self.blocks[PHOTO_ASKS[photo][0]]
         opening = self.blocks["OPENING"].strip()
         # OPENING은 모델이 만들지 않고 고정. 에피소드는 앱이 자기 첫 장면을 기록으로 보내므로 바 오프닝을 넣지 않음
         msgs = [] if state["episode"] else [{"role": "assistant", "content": opening}]
@@ -502,7 +530,6 @@ class Engine:
         )
 
         ids = {str(m.get("id")) for m in motion_list if isinstance(m, dict)}
-        pose_id = self._pose_request(user_message, motion_list)
         start = time.monotonic()
         for _ in range(2):  # 파싱 실패하면 1번 더 (두 번 합쳐 BUDGET_SEC 안에서)
             remaining = BUDGET_SEC - (time.monotonic() - start)
@@ -530,8 +557,13 @@ class Engine:
                     out["location"] = NIGHT_LOCATION
                 if pose_id:  # 포즈 부탁: 앱이 그 몸짓을 고정 재생하므로 답장도 같은 몸짓으로
                     out["motion_id"] = pose_id
+                if photo_on:
+                    out["photo_ask"] = self._photo_ask(photo, out, state)
                 return out
-        return dict(FALLBACK)
+        out = dict(FALLBACK)
+        if photo_on:  # 예비 지문에는 사진 제안 없음(소비하지 않음 → 다음 정상 대화에서 다시)
+            out["photo_ask"] = None
+        return out
 
     @staticmethod
     def _merge_same_role(messages: list[dict]) -> list[dict]:
@@ -606,6 +638,53 @@ class Engine:
             if isinstance(m, dict) and str(m.get("name") or "").strip() == name and m.get("id"):
                 return str(m["id"])
         return None
+
+    @classmethod
+    def _photo_due(cls, state: dict, event: str | None, night: str | None, user_message: str,
+                   history: list[dict], pose_id: str | None) -> tuple[str, str | None] | None:
+        """S5: 이번 답장에 사진 제안을 넣을 차례면 PHOTO_ASKS 키 (id, 갈래), 아니면 None. state 는 바꾸지 않음.
+        다른 사건·밤 넘기기·힌트·이름 장면·포즈 부탁·선물이 있는 답장에는 넣지 않고 다음 정상 대화에서 다시 봄."""
+        msg = (user_message or "").strip()
+        if (state["episode"] or event or night or state["night_next"] or msg == NEXT_NIGHT or pose_id
+                or "[유저가 선물함" in msg or state.get("_hint") or cls._name_scene_quiet(state)
+                or state["ending"] == "departed" or state["crisis"] in ("on", "rift")):
+            return None
+        asks, used = state["photo_asks"], state["used_events"]
+        if state["stage"] == 3 and "photo_3" not in asks and state["route"] in ROUTES:
+            scene = ROUTE_EVENTS[3][state["route"]]
+            if f"ROUTE_{scene}" not in used or state["pending_event"] == scene:
+                return None  # 갈래 장면이 아직 시작 답장을 내지 않음
+            if state["location"] != EVENT_LOCATIONS[scene]:
+                return None  # 장면의 첫 정상 답장이 장소를 옮긴 뒤부터 (예비 지문이면 장소가 그대로)
+            if state["scene"] == scene and not state["scene_msgs"] and cls._last_reply_fallback(history):
+                return None  # 판정이 늦어 셈이 0인데 직전 서아 답장이 예비 지문이면 아직 첫 정상 답장 전
+            return "photo_3", state["route"]
+        if state["stage"] == 6 and "photo_6" not in asks and state["ending"] == "stayed":
+            name = SIDE_OF_ROUTE.get(state["route"] or "")
+            if name and state[f"{name.lower()}_step"] < 3:
+                return None
+            return "photo_6", None
+        return None
+
+    @staticmethod
+    def _last_reply_fallback(history: list[dict]) -> bool:
+        """기록의 마지막 서아 답장이 없거나 예비 지문(「…」·서버 대체 응답)인지."""
+        last = next((str(h.get("t") or "").strip() for h in reversed(history) if h.get("r") == "c"), "")
+        spoken = re.sub(r"^\*[^*]*\*\s*", "", last).strip()
+        return not spoken or spoken in FALLBACK_TEXTS or last == FALLBACK_REPLY.strip()
+
+    @staticmethod
+    def _photo_ask(photo: tuple[str, str | None] | None, out: dict, state: dict) -> dict | None:
+        """S5: 확정 대사가 정상 답장에 그대로 들어갔고 장소가 그대로일 때만 photo_ask (값은 서버가 정함). emotion 도 원고대로."""
+        if not photo or out.get("gift_moment"):
+            return None
+        if out.get("location") and out["location"] != state["location"]:
+            return None
+        _, line, emotion, fields = PHOTO_ASKS[photo]
+        if PHOTO_KEY_STRIP.sub("", line) not in PHOTO_KEY_STRIP.sub("", out.get("dialogue") or ""):
+            return None  # 모델이 빠뜨림: 소비하지 않음, 다음 정상 대화에서 다시
+        out["emotion"] = emotion
+        return {"id": photo[0], "route": photo[1] or state["route"] or "care", **fields}
 
     @staticmethod
     def _parse_json(raw: str) -> dict | None:

@@ -42,10 +42,10 @@ class StageRuleTest(unittest.TestCase):  # A2
         self.assertEqual(nxt(**base, used_events={"ROUTE_DATE": 3}), 3)  # 마침
         self.assertIsNone(nxt(**dict(base, affection=24), used_events={"ROUTE_DATE": 3}))
         self.assertEqual(nxt(stage=2, affection=25, route="care", used_events={"ROUTE_WALK_HOME": 1}), 3)
-        self.assertEqual(nxt(**base, stage_flags=["outside"]), 3)  # 먼저 밖에 나가 장면을 건너뜀
+        self.assertIsNone(nxt(**base, stage_flags=["outside"]))  # S4-1: outside 만으로는 안 오름(장면을 마쳐야)
 
-    def test_2_to_3_without_route_outside(self):
-        self.assertEqual(nxt(stage=2, affection=25, stage_flags=["outside"]), 3)
+    def test_2_to_3_without_route_outside(self):  # S4-1: 갈래가 없으면 갈래 사건 차례에 서버가 정할 때까지 기다림
+        self.assertIsNone(nxt(stage=2, affection=25, stage_flags=["outside"]))
         self.assertIsNone(nxt(stage=2, affection=25))
 
     def test_3_to_4(self):
@@ -56,20 +56,20 @@ class StageRuleTest(unittest.TestCase):  # A2
         self.assertIsNone(nxt(stage=3, affection=39, route="tease", stage_flags=["sincere"], **done))
         self.assertEqual(nxt(stage=3, affection=40, route="care", stage_flags=["sincere"],
                              used_events={"ROUTE_ROOFTOP": 1}), 4)
-        self.assertEqual(nxt(stage=3, affection=40, stage_flags=["sincere"]), 4)  # 갈래 없음
+        self.assertIsNone(nxt(stage=3, affection=40, stage_flags=["sincere"]))  # 갈래 없음: S4-1 갈래 사건 때 서버가 정함
 
     def test_4_to_5(self):
         self.assertEqual(nxt(stage=4, affection=55, route="care", used_events={"ROUTE_ALLEY": 1}), 5)
         self.assertIsNone(nxt(stage=4, affection=55, route="care", used_events={"ROUTE_ALLEY": 1},
                               scene="ALLEY", scene_judges_left=2))
         self.assertIsNone(nxt(stage=4, affection=54, route="care", used_events={"ROUTE_ALLEY": 1}))
-        self.assertEqual(nxt(stage=4, affection=55), 5)  # 갈래 없음
+        self.assertIsNone(nxt(stage=4, affection=55))  # 갈래 없음: S4-1 갈래 사건 때 서버가 정함
         self.assertEqual(MIN_STAGE_MSGS[4], 6)
         self.assertIsNone(nxt(stage=4, affection=55, stage_user_msgs=5))
 
     def test_scene_closes_then_stage_up_same_judge(self):
         st = {"stage": 2, "affection": 30, "route": "tease", "stage_user_msgs": 9,
-              "used_events": {"ROUTE_DATE": 1}, "scene": "DATE", "scene_judges_left": 1}
+              "used_events": {"ROUTE_DATE": 1}, "scene": "DATE", "scene_msgs": 3}  # S4-1: 정상 답장 3개 지남
         r = judge(st)
         self.assertTrue(r["stage_up"])
         self.assertEqual(r["state"]["stage"], 3)
@@ -88,7 +88,8 @@ class HintTest(unittest.TestCase):  # A4
         self.assertIsNone(st["hint_due"])  # 최소 전
 
     def test_in_next_reply_once(self):
-        st = judge({"stage": 3, "affection": 30, "stage_user_msgs": 8, "used_events": {"NIGHT_END_3": 0}}, "응")["state"]
+        st = judge({"stage": 3, "affection": 30, "stage_user_msgs": 8, "route": "care",
+                    "used_events": {"NIGHT_END_3": 0, "ROUTE_ROOFTOP": 1}}, "응")["state"]  # S4-1: 장면은 마침
         self.assertEqual(st["hint_due"], "HINT_3")
         llm = Stub()
         engine(llm).reply(st, "응", [], [])
@@ -101,7 +102,8 @@ class HintTest(unittest.TestCase):  # A4
         self.assertIsNone(st["hint_due"])
 
     def test_again_after_10_and_max_two(self):
-        st = judge({"stage": 2, "affection": 20, "stage_user_msgs": 8, "used_events": {"NIGHT_END_2": 0}}, "응")["state"]
+        st = judge({"stage": 2, "affection": 20, "stage_user_msgs": 8, "route": "care",
+                    "used_events": {"NIGHT_END_2": 0, "ROUTE_WALK_HOME": 1}}, "응")["state"]  # S4-1: 장면은 마쳤고 호감이 모자람
         self.assertEqual((st["hint_due"], st["stage_hints"], st["hint_msgs"]), ("HINT_2", 1, 9))
         st = judge(dict(st, stage_user_msgs=17, short_streak=0), "응")["state"]  # 9 + 9
         self.assertIsNone(st["hint_due"])

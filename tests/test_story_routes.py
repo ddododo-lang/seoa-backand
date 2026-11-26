@@ -40,8 +40,11 @@ def engine(llm=None):
     return Engine(llm=llm or Stub(), store=Store(":memory:"), prompt_path=PROMPT)
 
 
+REPLY = "*잔을 내려놓는다.* …그래."  # 판정한 서아 답장(예비 지문 「…」이 아닌 정상 답장, S4-1)
+
+
 def judge(state, last_user="…", **verdict):
-    return engine(Stub(verdict)).judge(state, last_user, "…")
+    return engine(Stub(verdict)).judge(state, last_user, REPLY)
 
 
 def system_for(state):
@@ -112,9 +115,10 @@ class RouteEventsTest(unittest.TestCase):  # 2
         st = judge({"stage": 2, "affection": 41, "route": "tease", "used_events": dict(N2)})["state"]
         st["pending_event"] = None  # 앱이 답장 뒤 비움
         self.assertIn("위장 연인 부탁", system_for(st))
-        st = judge(st)["state"]
+        st = judge(st, "응\n그래\n알았어")["state"]  # S4-1: 시작 답장 + 2개 (판정 수가 아니라 정상 답장 수로 셈)
+        self.assertEqual((st["scene"], st["scene_msgs"]), ("DATE", 3))
         self.assertIn("위장 연인 부탁", system_for(dict(st, pending_event=None)))
-        st = judge(st)["state"]
+        st = judge(st)["state"]  # 시작 답장 뒤 3개째
         self.assertIsNone(st["scene"])
 
     def test_pursue_and_morning_blocks(self):
@@ -148,7 +152,7 @@ class DepartureTest(unittest.TestCase):  # 3·6 (S4: 남은 날·실패 엔딩 �
     def test_rewind_rule_and_strict_day(self):
         e = engine()
         self.assertIn("「…다시, 그 밤.」", e.blocks["BASE_SYSTEM"])
-        self.assertIn("5단계(엇갈림)에서는 장면이 분명히 다음 날로 넘어갈 때만", e.blocks["JUDGE_SYSTEM"])
+        self.assertIn("5단계(위기·엇갈림)에서는 장면이 분명히 다음 날로 넘어갈 때만", e.blocks["JUDGE_SYSTEM"])  # S4-1: 5단계 이름을 위기·엇갈림으로
 
 
 class GiftMomentTest(unittest.TestCase):  # 4
@@ -218,7 +222,8 @@ class TalkBonusTest(unittest.TestCase):  # 5
         self.assertEqual(r["state"]["affection"], 30)  # 1단계 상한 30 그대로
 
     def test_min_messages_and_progress(self):
-        base = {"stage": 2, "affection": 45, "stage_flags": ["outside"], "stage_user_msgs": 7}  # S4: 2→3 최소 9개
+        base = {"stage": 2, "affection": 45, "stage_flags": ["outside"], "stage_user_msgs": 7,  # S4: 2→3 최소 9개
+                "route": "care", "used_events": {"NIGHT_END_2": 0, "ROUTE_WALK_HOME": 1}}
         r = judge(base, "한 마디")
         self.assertFalse(r["stage_up"])
         self.assertEqual(r["progress"]["min_msgs_left"], 1)

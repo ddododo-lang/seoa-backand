@@ -39,8 +39,16 @@ def reply_system(state, msg="…"):
 class CrisisStartTest(unittest.TestCase):
     def test_4_to_5_crisis(self):
         for route in ("tease", "care", None):
-            r = judge({"stage": 4, "affection": 60, "stage_user_msgs": 6, "route": route,
-                       "used_events": {"ROUTE_ALLEY": 1}})
+            if route is None:  # S4-1: 갈래가 없으면 그 골목 차례에 서버가 care 로 정하고 그 골목부터
+                r = judge({"stage": 4, "affection": 60, "stage_user_msgs": 6, "used_events": {"ROUTE_ALLEY": 1}})
+                self.assertEqual((r["state"]["stage"], r["state"]["route"], r["pending_event"]), (4, "care", None))
+                r = judge({"stage": 4, "affection": 60, "stage_user_msgs": 6})
+                self.assertEqual((r["state"]["stage"], r["state"]["route"], r["pending_event"]), (4, "care", "ALLEY"))
+                st = dict(r["state"], pending_event=None, scene_msgs=3)
+                r = judge(st)  # 그 골목을 마친 판정에서 바로 위기
+            else:
+                r = judge({"stage": 4, "affection": 60, "stage_user_msgs": 6, "route": route,
+                           "used_events": {"ROUTE_ALLEY": 1}})
             st = r["state"]
             self.assertEqual((st["stage"], r["pending_event"], st["crisis"], st["judge_soon"], st["stage_label"]),
                              (5, "CRISIS", "on", True, "위기"), route)
@@ -70,7 +78,7 @@ class CrisisStartTest(unittest.TestCase):
             self.assertIn("한 응답에 한 대목씩", s)  # 위기 장면 대목을 이어 감
 
     def test_reveal_turn_is_not_judged(self):
-        r = judge({"stage": 4, "affection": 60, "stage_user_msgs": 6})
+        r = judge({"stage": 4, "affection": 60, "stage_user_msgs": 6, "route": "care", "used_events": {"ROUTE_ALLEY": 1}})
         st = dict(r["state"], pending_event=None)
         st = judge(st, "가지 마", flags=["sincere"])["state"]  # 소식을 꺼낸 답장을 판정하는 차례
         self.assertEqual((st["stage"], st["crisis"], st["crisis_msgs"]), (5, "on", 0))
@@ -198,8 +206,8 @@ class UnchangedTest(unittest.TestCase):
     def test_stage6_side_and_name_flow(self):
         st = judge({"stage": 6, "route": "care", "morning_done": True, "taeo_step": 2}, "…")["state"]
         self.assertEqual(st["pending_event"], "TAEO_3")  # 조연 마무리 그대로
-        st = judge({"stage": 2, "affection": 30, "stage_flags": ["outside"], "stage_user_msgs": 9,
-                    "user_name": "도윤"})["state"]
+        st = judge({"stage": 2, "affection": 30, "stage_flags": ["outside"], "stage_user_msgs": 9, "route": "tease",
+                    "used_events": {"NIGHT_END_2": 0, "ROUTE_DATE": 1}, "user_name": "도윤"})["state"]
         self.assertEqual((st["stage"], st["name_state"], st["pending_event"]), (3, "asked", "STAGE_UP_3"))
 
 

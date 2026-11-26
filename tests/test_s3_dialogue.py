@@ -153,8 +153,17 @@ class MemoryTest(unittest.TestCase):  # B5
         st = r["state"]
         self.assertEqual((st["stage"], st["stage_note_due"]), (2, 1))
         self.assertNotIn("[단계 기록 요청]", llm.prompts[0])
-        r = e.judge(st, "또 와", "…봐서.")
-        self.assertIn("[단계 기록 요청] 1단계(경계)를 한 문장으로", llm.prompts[1])
+        r = e.judge(st, "또 와", "…봐서.")  # S4-1: recent 가 없으면 지어내지 않고 미룸
+        self.assertNotIn("[단계 기록 요청]", llm.prompts[1])
+        self.assertEqual(r["state"]["stage_note_due"], 1)
+        recent = [{"r": "u", "t": "괜찮아?"}, {"r": "c", "t": "…신경 꺼."}, {"r": "u", "t": "손 줘 봐"},
+                  {"r": "c", "t": "…아파."}, {"r": "u", "t": "치료해 줄게"}, {"r": "c", "t": "…알아서 해."},
+                  {"r": "u", "t": "또 와"}, {"r": "c", "t": "…봐서."}, {"r": "u", "t": "내일 봐"}, {"r": "c", "t": "…응."}]
+        r = e.judge(r["state"], "내일 봐", "…응.", recent=recent)  # need_summary 가 false 여도 recent 로 기록
+        self.assertIn("[단계 기록 요청] 1단계(경계)를 아래 [단계 기록용 대화]만 보고 한 문장으로", llm.prompts[2])
+        part = llm.prompts[2].split("[단계 기록용 대화]\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("유저: 치료해 줄게", part)
+        self.assertNotIn("또 와", part)  # 다음 단계(2단계) 대화는 넣지 않음
         st = r["state"]
         self.assertEqual(st["stage_notes"], {"1": "서아가 손등 상처를 맡겼다."})
         self.assertIsNone(st["stage_note_due"])
@@ -170,7 +179,8 @@ class MemoryTest(unittest.TestCase):  # B5
         llm = JudgeStub({"stage_note": "새 기록"})
         r = engine(llm).judge({"stage": 3, "affection": 45, "stage_note_due": 2,
                                "stage_notes": {"2": "옛 기록"}}, "응", "…그래.")
-        self.assertEqual(r["state"]["stage_notes"], {"2": "새 기록"})
+        self.assertEqual(r["state"]["stage_notes"], {"2": "옛 기록"})  # S4-1: 저장된 기록은 덮어쓰지 않음
+        self.assertIsNone(r["state"]["stage_note_due"])
 
     def test_empty_blocks_say_none(self):
         s = system({"stage": 2})

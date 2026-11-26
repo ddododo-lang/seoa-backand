@@ -95,7 +95,8 @@ class StageUpSceneTest(unittest.TestCase):  # 3
     def test_judge_returns_scene_and_it_survives_normalize(self):
         e = engine(JudgeStub({"affection_delta": 3, "flags": ["sincere"], "time_advance": False,
                               "time_of_day": "", "summary": "", "reason": "진심"}))
-        result = e.judge({"stage": 3, "affection": 58, "stage_flags": [], "stage_user_msgs": 19},
+        result = e.judge({"stage": 3, "affection": 58, "stage_flags": [], "stage_user_msgs": 19, "route": "care",
+                          "used_events": {"NIGHT_END_3": 0, "ROUTE_ROOFTOP": 1}},  # S4-1: 갈래 장면을 마침
                          "너한테 거짓말 안 해.", "…")
         self.assertTrue(result["stage_up"])
         self.assertEqual(result["pending_event"], "STAGE_UP_4")

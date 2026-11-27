@@ -205,13 +205,13 @@ class CrisisJudgeTest(unittest.TestCase):  # B1
     def test_batch_after_news_counts(self):
         st = crisis_start()
         llm = PromptStub({"flags": ["pursue"]})
-        r = engine(llm).judge(st, "응\n가지 마\n여기 있어", REPLY)  # 첫째만 소식 전
+        r = engine(llm).judge(st, "응\n가지 마\n여기 있어", "\n".join([NEWS, REPLY, REPLY]))  # 첫째만 소식 전(S6: 앱은 답장을 모두 이어 보냄)
         self.assertEqual(r["state"]["stage"], 6)
         self.assertIn("[위기 판정]", llm.prompt)
         self.assertIn("첫 번째 유저 메시지는 서아가 소식을 꺼내기 전의 말이다", llm.prompt)
         self.assertIn("정확한 단어가 아니어도 sincere 또는 pursue", llm.prompt)
         st = crisis_start()
-        r, st = step(st, "응\n그렇구나\n음")
+        r, st = step(st, "응\n그렇구나\n음", "\n".join([NEWS, REPLY, REPLY]))
         self.assertEqual((st["stage"], st["crisis_msgs"]), (5, 2))
 
     def test_won_line_already_shown_counts(self):

@@ -302,6 +302,9 @@ def judge_soon(state: dict) -> bool:
         return False
     if state.get("stage_up_due"):
         return True  # S6: 상징 장면 답장을 바로 판정해 나왔는지 확인
+    scene = state.get("scene")
+    if scene in EVENT_LOCATIONS and state.get("location") != EVENT_LOCATIONS[scene] and not state.get("night_next"):
+        return True  # S6: 장소를 옮기는 장면이 아직 그곳에 못 감 → 답장마다 판정해 「세 번째 답장」을 바로 셈
     used = state.get("used_events") if isinstance(state.get("used_events"), dict) else {}
     return state.get("crisis") == "on" or (state.get("crisis") == "rift" and "RECONCILE_OPEN" in used)
 
@@ -1156,7 +1159,7 @@ class Engine:
         shown = re.sub(r"\s+", "", last_reply or "")
         route = state["route"] or "care"
         if state["crisis"] == "on":
-            post = self._crisis_news(state, shown, n_msgs, fallback, changes)
+            post = self._crisis_news(state, last_reply, n_msgs, changes)
             if not post:
                 return  # 소식이 아직 안 나갔거나(다시 넣음), 소식을 꺼낸 답장을 판정하는 차례
             state["crisis_msgs"] += post
@@ -1219,7 +1222,7 @@ class Engine:
     def _stage_up_seen(cls, state: dict, last_reply: str, n_msgs: int, fallback: bool, changes: list[str]) -> None:
         """S6: 단계가 오른 뒤 상징 장면(STAGE_UP_n, 이름이 있으면 3단계는 이름 장면)이 판정한 답장에 나왔는지 확인.
         나왔으면 그때부터 밤 마무리를 셈. 안 나왔으면 다음 답장에 다시(그 단계 유저 메시지 STAGE_UP_TRIES 개가 되면 나간 것으로 봄).
-        묶음(메시지 여럿)은 마지막 답장만 보이므로 나간 것으로 봄(중복 방지)."""
+        앱은 묶음의 서아 답장을 모두 이어 last_reply 로 보내므로 묶음이어도 그 글에서 찾음."""
         n = state["stage_up_due"]
         if not n:
             return
@@ -1233,14 +1236,13 @@ class Engine:
         shown = re.sub(r"\s+", "", last_reply or "")
         named = block == "STAGE_UP_3_NAMED"
         seen = STAGE_UP_KEYS.get(block, "") in shown
-        batch = n_msgs > 1 and not fallback
-        if seen or batch or state["stage_user_msgs"] >= STAGE_UP_TRIES:
+        if seen or state["stage_user_msgs"] >= STAGE_UP_TRIES:
             state["stage_up_due"], state["stage_up_msgs"] = None, state["stage_user_msgs"]
             if named:
                 if state["name_state"] == "none":
                     state["name_state"] = "asked"
                 state["used_events"]["NAME_ASK"] = state["turn"] - 1  # 다음 판정에서 유저의 대답을 봄
-            why = "답장에 나옴" if seen else "묶음이라 나간 것으로 봄" if batch else f"{STAGE_UP_TRIES}번 안 나옴 → 나간 것으로 봄"
+            why = "답장에 나옴" if seen else f"메시지 {STAGE_UP_TRIES}개 동안 안 나옴 → 나간 것으로 봄"
             changes.append(f"상징 장면 {block}: {why}")
             return
         if named and state["name_state"] == "asked":
@@ -1250,10 +1252,10 @@ class Engine:
         changes.append(f"상징 장면 {block} 이 답장에 없음 → 다음 답장에 다시")
 
     @staticmethod
-    def _crisis_news(state: dict, shown: str, n_msgs: int, fallback: bool, changes: list[str]) -> int:
+    def _crisis_news(state: dict, last_reply: str, n_msgs: int, changes: list[str]) -> int:
         """S6: 위기 소식 답장이 실제로 나갔는지 판정한 답장(last_reply)으로 확인. 소식 뒤에 온 유저 메시지 수를 돌려줌.
-        아직 안 나갔으면 CRISIS 를 다시 예약하고 0(셈·성공 판정 없음). 묶음(메시지 여럿)이면 마지막 답장만 보이므로
-        소식이 안 보여도 첫 답장에 나간 것으로 봄(예전 방식, 중복 방지)."""
+        아직 안 나갔으면 CRISIS 를 다시 예약하고 0(셈·성공 판정 없음). 앱은 묶음의 답장을 줄마다 이어 보내므로,
+        줄 수가 메시지 수와 같으면 소식이 나온 줄 뒤의 메시지만 셈(아니면 0)."""
         used, turn = state["used_events"], state["turn"]
         if state["pending_event"] == "CRISIS":
             used["CRISIS"] = turn  # 예약만 됨: 앱이 아직 소식 답장을 내지 않음
@@ -1263,14 +1265,13 @@ class Engine:
         if not n_msgs:
             return 0
         key = CRISIS_NEWS_KEYS[state["route"] or "care"]
-        if key in shown:
+        if key in re.sub(r"\s+", "", last_reply or ""):
             state["crisis_news"] = True
-            changes.append("위기 소식이 나감 (이번 답장)")
-            return 0  # 이번 묶음의 말은 모두 소식 전
-        if n_msgs > 1 and not fallback:
-            state["crisis_news"] = True
-            changes.append("위기 소식: 묶음이라 첫 답장에 나간 것으로 봄")
-            return n_msgs - 1
+            rows = [x for x in (last_reply or "").split("\n") if x.strip()]
+            at = next((i for i, x in enumerate(rows) if key in re.sub(r"\s+", "", x)), len(rows))
+            post = len(rows) - 1 - at if len(rows) == n_msgs else 0
+            changes.append("위기 소식이 나감" + (f" (그 뒤 메시지 {post}개)" if post else ""))
+            return post
         tries = int(used.get("CRISIS_TRY") or 1)
         if tries >= CRISIS_NEWS_TRIES:
             state["crisis_news"] = True

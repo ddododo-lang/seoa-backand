@@ -82,6 +82,13 @@ class CrisisNewsTest(unittest.TestCase):  # A
         self.assertTrue(st["crisis_news"])  # 무한히 미루지 않음
         self.assertNotIn("CRISIS", pending[CRISIS_NEWS_TRIES - 1:])
 
+    def test_news_in_batch(self):
+        st = crisis_start("care")
+        r, st = step(st, "응\n가지 마", NEWS["care"] + "\n" + OFF_SCRIPT, flags=["pursue"])  # 소식 뒤 한 개
+        self.assertEqual(st["stage"], 6)
+        r, st = step(crisis_start("care"), "응\n가지 마", OFF_SCRIPT + "\n" + NEWS["care"], flags=["pursue"])
+        self.assertEqual((st["stage"], st["crisis_news"], st["crisis_msgs"]), (5, True, 0))  # 둘 다 소식 전
+
     def test_fallback_news_rebooks(self):
         r, st = step(crisis_start("tease"), "응", "…")
         self.assertEqual((r["pending_event"], st["crisis_news"]), ("CRISIS", False))
@@ -156,8 +163,11 @@ class StageUpOrderTest(unittest.TestCase):  # B
 
     def test_batch_counts_as_shown(self):
         st = dict(self.rise(), pending_event=None)
-        r, st = step(st, "응\n그래", WALK)  # 마지막 답장만 보이는 묶음: 중복을 피해 나간 것으로
+        r, st = step(st, "응\n그래", ASK_REPLY + "\n" + WALK)  # 앱은 묶음의 답장을 모두 이어 보냄
         self.assertEqual((st["stage_up_due"], r["pending_event"]), (None, None))
+        st = dict(self.rise(), pending_event=None)
+        r, st = step(st, "응\n그래", WALK + "\n" + WALK)  # 묶음 어디에도 없음 → 다시
+        self.assertEqual((st["stage_up_due"], r["pending_event"]), (3, "STAGE_UP_3"))
 
     def test_symbol_not_carried_to_next_night(self):
         st = normalize_state({"stage": 3, "route": "care", "user_name": "도환", "name_state": "asked",
@@ -276,6 +286,15 @@ class MoveTest(unittest.TestCase):  # D
         self.assertEqual(self.reply(dict(base, scene_msgs=2), sit)["location"], "바 옥상")  # 세 번째: 그대로 옮김
         self.assertIsNone(self.reply(dict(base, scene_msgs=2, location="바 옥상"), sit)["location"])  # 이미 옮김
         self.assertIsNone(self.reply(dict(base, scene_msgs=3), "계단을 내려간다.")["location"])  # 창 밖: 되돌리지 않음
+
+    def test_judge_soon_until_moved(self):
+        from engine import judge_soon
+        self.assertTrue(judge_soon({"stage": 3, "scene": "ROOFTOP", "location": "바 '라스트 오더' 1층"}))
+        self.assertFalse(judge_soon({"stage": 3, "scene": "ROOFTOP", "location": "바 옥상"}))
+        self.assertFalse(judge_soon({"stage": 2, "scene": "WALK_HOME", "location": "바 '라스트 오더' 1층"}))  # 모델이 옮김
+        r, st = step({"stage": 3, "route": "care", "affection": 30, "stage_user_msgs": 4, "day": 3,
+                      "used_events": {"NIGHT_END_3": 1}}, "응", "*본다.* …그래.")
+        self.assertEqual((r["pending_event"], st["judge_soon"]), ("ROOFTOP", True))
 
     def test_model_location_kept(self):
         st = {"stage": 3, "route": "care", "pending_event": "ROOFTOP", "scene": "ROOFTOP"}

@@ -241,5 +241,47 @@ class FarewellOnceTest(unittest.TestCase):  # C
             self.assertEqual(st["pending_event"], "NIGHT_END", stage)
 
 
+
+class MoveTest(unittest.TestCase):  # D
+    D1 = "장소를 바꾸는 이번 답장의 지문 첫 문장은 그곳으로 이동하는 대목이다"
+
+    def reply(self, state, action, history=()):
+        return engine(Stub(reply={"action": action})).reply(state, "응", list(history), [])
+
+    def test_prompt_lines(self):
+        e = engine()
+        for name in ("EVENT_ROOFTOP", "EVENT_STORM", "EVENT_ALLEY", "CRISIS_TEASE", "CRISIS_CARE", "EVENT_DATE",
+                     "EVENT_WALK_HOME"):
+            self.assertIn(self.D1, e.blocks[name], name)
+            self.assertIn("옮기기 전 장소의 물건(카운터·잔·의자)은 이 답장부터 쓰지 않는다.", e.blocks[name])
+        self.assertNotIn(self.D1, e.blocks["EVENT_BLACKOUT"])
+        world = e.blocks["MAIN_WORLD"]
+        line = "2층과 옥상은 사장님 공간이다. 서아는 「옥상, 올라가도 돼?」처럼 먼저 묻거나 사장님을 따라간다."
+        self.assertIn(line, world)
+        self.assertLess(world.index("# 장소와 일관성"), world.index(line))
+
+    def test_event_start_fills_only_with_move(self):
+        st = {"stage": 3, "route": "care", "pending_event": "ROOFTOP", "scene": "ROOFTOP"}
+        self.assertEqual(self.reply(st, "계단을 올라 옥상 문을 연다. 바람이 분다.")["location"], "바 옥상")
+        self.assertIsNone(self.reply(st, "잔을 내려놓고 카운터에 기댄다.")["location"])
+        st = {"stage": 3, "route": "tease", "pending_event": "STORM", "scene": "STORM"}
+        self.assertIsNone(self.reply(st, "창밖을 본다.")["location"])
+        self.assertEqual(self.reply(st, "서아가 당신을 따라 2층으로 향한다.")["location"], "바 '라스트 오더' 2층")
+
+    def test_scene_continues_then_forced_third(self):
+        base = {"stage": 3, "route": "care", "scene": "ROOFTOP", "used_events": {"ROUTE_ROOFTOP": 1}}
+        sit = "의자에 앉은 채 잔을 돌린다."
+        self.assertIsNone(self.reply(dict(base, scene_msgs=1), sit)["location"])  # 두 번째: 이동 대목 없음 → 그대로
+        self.assertEqual(self.reply(dict(base, scene_msgs=1), "문을 열고 옥상으로 나선다.")["location"], "바 옥상")
+        self.assertEqual(self.reply(dict(base, scene_msgs=2), sit)["location"], "바 옥상")  # 세 번째: 그대로 옮김
+        self.assertIsNone(self.reply(dict(base, scene_msgs=2, location="바 옥상"), sit)["location"])  # 이미 옮김
+        self.assertIsNone(self.reply(dict(base, scene_msgs=3), "계단을 내려간다.")["location"])  # 창 밖: 되돌리지 않음
+
+    def test_model_location_kept(self):
+        st = {"stage": 3, "route": "care", "pending_event": "ROOFTOP", "scene": "ROOFTOP"}
+        out = engine(Stub(reply={"action": "잔을 든다.", "location": "바 옥상"})).reply(st, "응", [], [])
+        self.assertEqual(out["location"], "바 옥상")  # 모델이 직접 옮긴 것은 그대로(프롬프트 D1 로 이끎)
+
+
 if __name__ == "__main__":
     unittest.main()

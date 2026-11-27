@@ -95,10 +95,10 @@ class SceneDoneTest(unittest.TestCase):  # A3
 
     def test_location_moves_on_first_real_scene_reply(self):
         st = normalize_state({"stage": 3, "route": "tease", "scene": "STORM", "used_events": {"ROUTE_STORM": 1}})
-        out = engine().reply(st, "응", [], [])
+        out = engine(Stub(reply={"action": "당신을 따라 계단을 오른다."})).reply(st, "응", [], [])  # S6: 이동 대목이 있을 때
         self.assertEqual(out["location"], "바 '라스트 오더' 2층")
-        out = engine().reply(dict(st, scene_msgs=2, location="바 '라스트 오더' 1층"), "응", [], [])
-        self.assertIsNone(out["location"])  # 이미 시작된 장면은 모델에 맡김
+        out = engine().reply(dict(st, scene_msgs=3, location="바 '라스트 오더' 1층"), "응", [], [])
+        self.assertIsNone(out["location"])  # 이미 진행된 장면(세 번째 답장 뒤)은 모델에 맡김
 
     def test_no_random_event_during_scene(self):
         st = dict(night2("tease"), scene="DATE", scene_msgs=1, used_events={"NIGHT_END_2": 1, "ROUTE_DATE": 4},

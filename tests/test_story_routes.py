@@ -130,7 +130,7 @@ class RouteEventsTest(unittest.TestCase):  # 2
 
     def test_event_locations(self):
         for ev, loc in (("ROOFTOP", "바 옥상"), ("ALLEY", "비 내리는 골목")):
-            out = engine(Stub()).reply({"stage": 4, "route": "care", "pending_event": ev}, "…", [], [])
+            out = engine(Stub(reply={"action": "문을 열고 나선다."})).reply({"stage": 4, "route": "care", "pending_event": ev}, "…", [], [])  # S6: 이동 대목
             self.assertEqual(out["location"], loc)
 
 

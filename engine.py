@@ -103,6 +103,9 @@ ROUTE_SCENES = {"DATE", "WALK_HOME", "STORM", "ROOFTOP", "ALLEY"}
 SCENE_JUDGES = 2  # 예전 값(장면 블록을 넣을 판정 수). S4-1 부터 마침은 SCENE_REPLIES_DONE 으로 셈, 키는 호환용
 SCENE_REPLIES_DONE = 4  # S4-1: 장면 시작 답장 + 그 뒤 유저 메시지 3개가 정상 응답(예비 지문 아님)으로 지나가면 마침
 FALLBACK_TEXTS = {"…", "..."}  # 예비 지문(FALLBACK) 답장. 판정한 답장이 이것이면 장면·사건 답장으로 세지 않음
+# S6: 서버가 모델 대신 location 을 채우는 것은 그 답장 action 에 이동 대목이 있을 때만. 없으면 다음 답장에서 이동 대목부터
+MOVE_WORDS = ("나선다", "나간다", "올라", "계단", "문을 열", "걸어", "따라", "향한다", "들어선다")
+MOVE_FORCE_AT = 2  # 장면이 열린 뒤 정상 답장(scene_msgs)이 이만큼 지나 세 번째 답장이면 이동 대목이 없어도 옮김(무한히 미루지 않음)
 BAR_LOCATIONS = {"바 '라스트 오더' 1층", "바 '라스트 오더' 2층"}
 STAGE_UP_SCENES = {2, 3, 4, 6}  # 단계가 오른 다음 답장에 한 번 넣는 상징 장면(STAGE_UP_n). 5는 DEPARTURE
 # S6: 상징 장면이 판정한 답장(공백 뺌)에 나왔는지 보는 원고 대사 조각. 안 나왔으면 다음 답장에 다시(그 단계 유저 메시지 STAGE_UP_TRIES 개까지)
@@ -568,11 +571,13 @@ class Engine:
                 out["gift_moment"] = self._gift_moment(data.get("gift_moment"), state["gift_moments"])
                 if event in DAY_MARKERS:  # 남은 날 지문은 모델에 맡기지 않고 그대로 앞에 붙임
                     out["action"] = f"{DAY_MARKERS[event]} {out['action'] or ''}".strip()
-                if not out["location"] and event in EVENT_LOCATIONS:  # 장소를 옮기는 사건인데 모델이 빠뜨리면 서버가 채움
+                moved = any(w in (out["action"] or "") for w in MOVE_WORDS)  # S6: 이동 대목이 있을 때만 서버가 채움
+                if not out["location"] and event in EVENT_LOCATIONS and moved:  # 장소를 옮기는 사건인데 모델이 빠뜨리면
                     out["location"] = EVENT_LOCATIONS[event]
-                scene = state["scene"]  # S4-1: 시작 답장이 예비 지문이었으면 장면의 첫 정상 답장이 장소를 옮김
+                scene = state["scene"]  # S4-1·S6: 장면이 아직 그 장소로 옮기지 못했으면 이어지는 답장이 옮김(세 번째는 그대로)
                 if (not out["location"] and not event and not night and scene in EVENT_LOCATIONS
-                        and not state["scene_msgs"] and state["location"] != EVENT_LOCATIONS[scene]):
+                        and state["scene_msgs"] <= MOVE_FORCE_AT and state["location"] != EVENT_LOCATIONS[scene]
+                        and (moved or state["scene_msgs"] >= MOVE_FORCE_AT)):
                     out["location"] = EVENT_LOCATIONS[scene]
                 if event == "CRISIS" and not state["episode"]:  # S4: 위기 장소는 갈래로 정함
                     out["location"] = CRISIS_LOCATIONS[state["route"] or "care"]

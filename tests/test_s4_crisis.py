@@ -83,27 +83,28 @@ class CrisisStartTest(unittest.TestCase):
         st = engine(Stub({"flags": ["sincere"]})).judge(st, "가지 마", "*난간에 앉는다.* " + START["care"])["state"]  # 소식을 꺼낸 답장을 판정하는 차례
         self.assertEqual((st["stage"], st["crisis"], st["crisis_msgs"]), (5, "on", 0))
         st = judge(st, "가지 마", flags=["sincere"])["state"]
-        self.assertEqual((st["stage"], st["crisis"]), (6, "done"))
+        self.assertEqual((st["stage"], st["crisis"], st["lovers"]), (5, "done", "ask"))  # S7
 
 
 class CrisisWinTest(unittest.TestCase):
     def test_win_shown_in_same_reply(self):
         r = engine(Stub({"flags": ["pursue"]})).judge(on("tease"), "가지 마.", "*고개를 든다.* " + WON["tease"])
         st = r["state"]
-        self.assertEqual((st["stage"], st["crisis"], r["pending_event"], st["won_line"]), (6, "done", "STAGE_UP_6", None))
-        self.assertTrue(st["judge_soon"])  # S6: 상징 장면(STAGE_UP_6) 답장을 바로 판정해 확인
+        self.assertEqual((st["stage"], st["crisis"], r["pending_event"], st["won_line"]), (5, "done", "LOVERS_ASK", None))
+        self.assertTrue(st["judge_soon"])  # S7: 연인 확정 물음 답장을 바로 판정
         s = system_for(st)
-        self.assertIn(STAGE_UP_6, s)
+        self.assertIn("진짜로 만날래, 우리?", s)
+        self.assertNotIn(STAGE_UP_6, s)
         self.assertNotIn(WON["tease"], s)  # 같은 답장에 이미 나왔으니 다시 넣지 않음
 
     def test_win_not_shown_goes_next_reply_once(self):
         r = engine(Stub({"flags": ["sincere"]})).judge(on("care"), "너 없으면 안 돼.", "…")
         st = r["state"]
-        self.assertEqual((st["stage"], st["won_line"], r["pending_event"]), (6, "WON_CARE", "STAGE_UP_6"))
+        self.assertEqual((st["stage"], st["won_line"], r["pending_event"]), (5, "WON_CARE", "LOVERS_ASK"))
         s = system_for(st)
         self.assertIn(WON["care"], s)
-        self.assertIn(STAGE_UP_6, s)
-        self.assertLess(s.index(WON["care"]), s.index("# 단계가 막 올랐다"))  # 성공 대사 → 상징 장면 차례
+        self.assertIn("앞으로도 네 옆에 있고 싶어.", s)
+        self.assertLess(s.index(WON["care"]), s.index("앞으로도 네 옆에 있고 싶어."))
         st = judge(dict(st, pending_event=None))["state"]
         self.assertIsNone(st["won_line"])
         self.assertNotIn(WON["care"], system_for(st))
@@ -146,9 +147,9 @@ class CrisisHintAndRiftTest(unittest.TestCase):
         self.assertEqual(st["stage"], 5)
         r = engine(Stub({"flags": ["apologize"]})).judge(st, "그날 미안했어.", "*몸을 돌린다.* " + RECONCILE)
         st = r["state"]
-        self.assertEqual((st["stage"], st["crisis"], r["pending_event"], st["won_line"]), (6, "done", "STAGE_UP_6", None))
+        self.assertEqual((st["stage"], st["crisis"], r["pending_event"], st["won_line"]), (5, "done", "LOVERS_ASK", None))
         self.assertGreaterEqual(st["affection"], 55)
-        self.assertEqual(st["stage_label"], "연인")
+        self.assertEqual(st["stage_label"], "고백")  # S7: 연인 확정을 묻는 중
 
     def test_reconcile_hint(self):
         st = rift(crisis_msgs=6, hint_msgs=6, used_events={"CRISIS": 5, "RIFT_START": 12, "RECONCILE_OPEN": 15})
@@ -162,7 +163,7 @@ class CrisisHintAndRiftTest(unittest.TestCase):
     def test_sincere_also_reconciles(self):
         st = rift(crisis_msgs=8, used_events={"CRISIS": 5, "RECONCILE_OPEN": 15})
         st = judge(st, "보고 싶었어.", flags=["sincere"])["state"]
-        self.assertEqual(st["stage"], 6)
+        self.assertEqual((st["stage"], st["lovers"]), (5, "ask"))
         self.assertEqual(st["affection"], 55)
         self.assertEqual(st["won_line"], "WON_RECONCILE")
         self.assertIn(RECONCILE, system_for(st))

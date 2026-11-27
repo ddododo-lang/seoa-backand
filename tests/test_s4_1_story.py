@@ -200,13 +200,13 @@ class CrisisJudgeTest(unittest.TestCase):  # B1
         _, st = step(st, "가지 마", NEWS, flags=["sincere"])  # 소식 답장을 판정하는 차례(그 전 메시지)
         self.assertEqual((st["stage"], st["crisis_msgs"]), (5, 0))
         _, st = step(st, "가지 마", flags=["pursue"])
-        self.assertEqual(st["stage"], 6)
+        self.assertEqual((st["stage"], st["lovers"]), (5, "ask"))  # S7: 마음 확인 → 연인 확정 묻기
 
     def test_batch_after_news_counts(self):
         st = crisis_start()
         llm = PromptStub({"flags": ["pursue"]})
         r = engine(llm).judge(st, "응\n가지 마\n여기 있어", "\n".join([NEWS, REPLY, REPLY]))  # 첫째만 소식 전(S6: 앱은 답장을 모두 이어 보냄)
-        self.assertEqual(r["state"]["stage"], 6)
+        self.assertEqual((r["state"]["stage"], r["state"]["lovers"]), (5, "ask"))
         self.assertIn("[위기 판정]", llm.prompt)
         self.assertIn("첫 번째 유저 메시지는 서아가 소식을 꺼내기 전의 말이다", llm.prompt)
         self.assertIn("정확한 단어가 아니어도 sincere 또는 pursue", llm.prompt)
@@ -218,7 +218,7 @@ class CrisisJudgeTest(unittest.TestCase):  # B1
         st = crisis_start()
         _, st = step(st, "응", NEWS)
         r = engine(Stub()).judge(st, "…있어 줘", WON_CARE)  # 판정 flags 가 비어도 성공 대사가 나왔으면 성공
-        self.assertEqual((r["state"]["stage"], r["state"]["won_line"], r["pending_event"]), (6, None, "STAGE_UP_6"))
+        self.assertEqual((r["state"]["stage"], r["state"]["won_line"], r["pending_event"]), (5, None, "LOVERS_ASK"))
 
     def test_fallback_news_is_redone(self):
         st = crisis_start()
@@ -252,7 +252,7 @@ class RiftTest(unittest.TestCase):  # B2
         _, st = step(st, "응")  # 문을 연 답장을 판정하는 차례
         self.assertEqual(st["stage"], 5)
         r, st = step(st, "응")  # 문 뒤 유저 답: 다시 사과하지 않아도
-        self.assertEqual((st["stage"], st["won_line"], r["pending_event"]), (6, "WON_RECONCILE", "STAGE_UP_6"))
+        self.assertEqual((st["stage"], st["won_line"], r["pending_event"]), (5, "WON_RECONCILE", "LOVERS_ASK"))
         self.assertFalse(st["rift_sorry"])
 
     def test_withdraw_no_forced_reconcile(self):
@@ -265,7 +265,7 @@ class RiftTest(unittest.TestCase):  # B2
         _, st = step(st, "응")
         self.assertEqual(st["stage"], 5)
         _, st = step(st, "미안해 그날", flags=["apologize"])
-        self.assertEqual(st["stage"], 6)
+        self.assertEqual((st["stage"], st["lovers"]), (5, "ask"))
 
     def test_withdraw_after_door(self):
         _, st = step(rift_night(), "미안", flags=["apologize"])
@@ -304,9 +304,9 @@ class WonLineTest(unittest.TestCase):  # B3
         st = rift_night(crisis_msgs=8, rift_sorry=True, used_events={"CRISIS": 5, "RIFT_START": 12, "RECONCILE_OPEN": 15})
         r = engine(Stub()).judge(st, "응", RECONCILE)
         st = r["state"]
-        self.assertEqual((st["stage"], st["won_line"]), (6, None))
+        self.assertEqual((st["stage"], st["won_line"]), (5, None))
         self.assertNotIn("…늦었잖아. 그래도, 왔으니까.", system_for(st))
-        self.assertIn("매일 온 거, 술 때문 아니었어.", system_for(st))
+        self.assertIn("나랑 만나 줄래?", system_for(st))  # S7: 화해 뒤 연인 확정 물음
 
 
 class NoteStub(Stub):

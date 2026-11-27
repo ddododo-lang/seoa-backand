@@ -55,7 +55,7 @@ class WithdrawTest(unittest.TestCase):  # A
         _, st = step(st, "…그냥 그렇다고")  # 아무 말도 아님: 기억이 지워져 화해 안 함
         self.assertEqual(st["stage"], 5)
         r, st = step(st, "아까 말 미안해. 보고 싶었어", flags=["sincere"])
-        self.assertEqual((st["stage"], st["crisis"], r["pending_event"]), (6, "done", "STAGE_UP_6"))
+        self.assertEqual((st["stage"], st["crisis"], r["pending_event"]), (5, "done", "LOVERS_ASK"))  # S7: 연인 확정 묻기
 
     def test_judge_guide(self):  # A2
         for text in (RIFT_JUDGE_NOTE, engine().blocks["JUDGE_SYSTEM"]):
@@ -113,16 +113,16 @@ class WonLineCheckTest(unittest.TestCase):  # C
         st = crisis_start("care")
         _, st = step(st, "응", NEWS)
         r = engine(Stub({"flags": ["pursue"]})).judge(st, "가지 마", "*일어선다.* 이제 내려가자.")  # 「같이」 없음
-        self.assertEqual((r["state"]["stage"], r["state"]["won_line"]), (6, "WON_CARE"))
+        self.assertEqual((r["state"]["stage"], r["state"]["won_line"]), (5, "WON_CARE"))  # S7: 다음 답장 LOVERS_ASK 앞
         self.assertIn("…내려가자. 같이.", system_for(r["state"]))
         r = engine(Stub({"flags": ["sincere"]})).judge(after_door(), "미안해", "*돌아본다.* …늦었잖아.")  # 「왔으니까」 없음
-        self.assertEqual((r["state"]["stage"], r["state"]["won_line"]), (6, "WON_RECONCILE"))
+        self.assertEqual((r["state"]["stage"], r["state"]["won_line"]), (5, "WON_RECONCILE"))
 
     def test_full_line_not_repeated(self):  # 11
         st = crisis_start("care")
         _, st = step(st, "응", NEWS)
         r = engine(Stub({"flags": ["pursue"]})).judge(st, "가지 마", "*난간에서 내려온다.* …내려가자. 같이.")
-        self.assertEqual((r["state"]["stage"], r["state"]["won_line"]), (6, None))
+        self.assertEqual((r["state"]["stage"], r["state"]["won_line"]), (5, None))
         self.assertNotIn("…내려가자. 같이.", system_for(r["state"]))
         st = crisis_start("tease")
         _, st = step(st, "응", NEWS)

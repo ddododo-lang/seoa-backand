@@ -53,14 +53,14 @@ class CrisisNewsTest(unittest.TestCase):  # A
             r, st = step(st, "가지 마", NEWS[route], flags=["sincere"])  # 소식이 나간 답장을 판정: 그 전의 말
             self.assertEqual((st["stage"], st["crisis_news"], st["crisis_msgs"]), (5, True, 0), route)
             r, st = step(st, "가지 마", "*본다.* …", flags=["sincere"])  # 소식 뒤 진심
-            self.assertEqual((st["stage"], r["pending_event"]), (6, "STAGE_UP_6"), route)
+            self.assertEqual((st["stage"], r["pending_event"]), (5, "LOVERS_ASK"), route)  # S7
 
     def test_news_then_sincere_wins(self):
         for route in ("tease", "care"):
             _, st = step(crisis_start(route), "응", NEWS[route])
             self.assertTrue(st["crisis_news"])
             r, st = step(st, "너 없으면 안 돼", "*본다.* …", flags=["sincere"])
-            self.assertEqual(st["stage"], 6, route)
+            self.assertEqual((st["stage"], st["lovers"]), (5, "ask"), route)
 
     def test_watch_only_after_news(self):
         for route in ("tease", "care"):
@@ -85,7 +85,7 @@ class CrisisNewsTest(unittest.TestCase):  # A
     def test_news_in_batch(self):
         st = crisis_start("care")
         r, st = step(st, "응\n가지 마", NEWS["care"] + "\n" + OFF_SCRIPT, flags=["pursue"])  # 소식 뒤 한 개
-        self.assertEqual(st["stage"], 6)
+        self.assertEqual((st["stage"], st["lovers"]), (5, "ask"))
         r, st = step(crisis_start("care"), "응\n가지 마", OFF_SCRIPT + "\n" + NEWS["care"], flags=["pursue"])
         self.assertEqual((st["stage"], st["crisis_news"], st["crisis_msgs"]), (5, True, 0))  # 둘 다 소식 전
 
@@ -279,13 +279,18 @@ class MoveTest(unittest.TestCase):  # D
         self.assertEqual(self.reply(st, "서아가 당신을 따라 2층으로 향한다.")["location"], "바 '라스트 오더' 2층")
 
     def test_scene_continues_then_forced_third(self):
-        base = {"stage": 3, "route": "care", "scene": "ROOFTOP", "used_events": {"ROUTE_ROOFTOP": 1}}
+        # S7 A1: 옥상(ROOFTOP)은 유저가 받아 줘야 옮기므로 세 번째 답장 강제 이동은 2층(STORM)으로 확인
+        base = {"stage": 3, "route": "tease", "scene": "STORM", "used_events": {"ROUTE_STORM": 1}}
+        floor2 = "바 '라스트 오더' 2층"
         sit = "의자에 앉은 채 잔을 돌린다."
         self.assertIsNone(self.reply(dict(base, scene_msgs=1), sit)["location"])  # 두 번째: 이동 대목 없음 → 그대로
-        self.assertEqual(self.reply(dict(base, scene_msgs=1), "문을 열고 옥상으로 나선다.")["location"], "바 옥상")
-        self.assertEqual(self.reply(dict(base, scene_msgs=2), sit)["location"], "바 옥상")  # 세 번째: 그대로 옮김
-        self.assertIsNone(self.reply(dict(base, scene_msgs=2, location="바 옥상"), sit)["location"])  # 이미 옮김
+        self.assertEqual(self.reply(dict(base, scene_msgs=1), "계단을 올라 2층 문을 연다.")["location"], floor2)
+        self.assertEqual(self.reply(dict(base, scene_msgs=2), sit)["location"], floor2)  # 세 번째: 그대로 옮김
+        self.assertIsNone(self.reply(dict(base, scene_msgs=2, location=floor2), sit)["location"])  # 이미 옮김
         self.assertIsNone(self.reply(dict(base, scene_msgs=3), "계단을 내려간다.")["location"])  # 창 밖: 되돌리지 않음
+        roof = {"stage": 3, "route": "care", "scene": "ROOFTOP", "used_events": {"ROUTE_ROOFTOP": 1}}
+        self.assertEqual(self.reply(dict(roof, scene_msgs=1), "문을 열고 옥상으로 나선다.")["location"], "바 옥상")
+        self.assertIsNone(self.reply(dict(roof, scene_msgs=2), "창가에 기대 하늘을 본다.")["location"])  # 창문으로 봄
 
     def test_judge_soon_until_moved(self):
         from engine import judge_soon

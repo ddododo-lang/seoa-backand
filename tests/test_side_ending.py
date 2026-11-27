@@ -170,7 +170,7 @@ class StayedTest(unittest.TestCase):  # 5
     def test_stage_up_to_6_does_not_stay_yet(self):
         st = judge({"stage": 5, "affection": 95, "departure_days_left": 2, "route": "care",
                     "stage_user_msgs": 40}, "가지 마", flags=["pursue"], time_advance=True)["state"]
-        self.assertEqual((st["stage"], st["pending_event"]), (6, "STAGE_UP_6"))
+        self.assertEqual((st["stage"], st["pending_event"]), (5, "LOVERS_ASK"))  # S7: 연인 확정 묻기 먼저
         self.assertIsNone(st["ending"])
         self.assertFalse(st["morning_done"])
 

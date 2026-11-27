@@ -279,13 +279,18 @@ class MoveTest(unittest.TestCase):  # D
         self.assertEqual(self.reply(st, "서아가 당신을 따라 2층으로 향한다.")["location"], "바 '라스트 오더' 2층")
 
     def test_scene_continues_then_forced_third(self):
-        base = {"stage": 3, "route": "care", "scene": "ROOFTOP", "used_events": {"ROUTE_ROOFTOP": 1}}
+        # S7 A1: 옥상(ROOFTOP)은 유저가 받아 줘야 옮기므로 세 번째 답장 강제 이동은 2층(STORM)으로 확인
+        base = {"stage": 3, "route": "tease", "scene": "STORM", "used_events": {"ROUTE_STORM": 1}}
+        floor2 = "바 '라스트 오더' 2층"
         sit = "의자에 앉은 채 잔을 돌린다."
         self.assertIsNone(self.reply(dict(base, scene_msgs=1), sit)["location"])  # 두 번째: 이동 대목 없음 → 그대로
-        self.assertEqual(self.reply(dict(base, scene_msgs=1), "문을 열고 옥상으로 나선다.")["location"], "바 옥상")
-        self.assertEqual(self.reply(dict(base, scene_msgs=2), sit)["location"], "바 옥상")  # 세 번째: 그대로 옮김
-        self.assertIsNone(self.reply(dict(base, scene_msgs=2, location="바 옥상"), sit)["location"])  # 이미 옮김
+        self.assertEqual(self.reply(dict(base, scene_msgs=1), "계단을 올라 2층 문을 연다.")["location"], floor2)
+        self.assertEqual(self.reply(dict(base, scene_msgs=2), sit)["location"], floor2)  # 세 번째: 그대로 옮김
+        self.assertIsNone(self.reply(dict(base, scene_msgs=2, location=floor2), sit)["location"])  # 이미 옮김
         self.assertIsNone(self.reply(dict(base, scene_msgs=3), "계단을 내려간다.")["location"])  # 창 밖: 되돌리지 않음
+        roof = {"stage": 3, "route": "care", "scene": "ROOFTOP", "used_events": {"ROUTE_ROOFTOP": 1}}
+        self.assertEqual(self.reply(dict(roof, scene_msgs=1), "문을 열고 옥상으로 나선다.")["location"], "바 옥상")
+        self.assertIsNone(self.reply(dict(roof, scene_msgs=2), "창가에 기대 하늘을 본다.")["location"])  # 창문으로 봄
 
     def test_judge_soon_until_moved(self):
         from engine import judge_soon

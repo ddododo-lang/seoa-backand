@@ -53,14 +53,14 @@ class CrisisNewsTest(unittest.TestCase):  # A
             r, st = step(st, "가지 마", NEWS[route], flags=["sincere"])  # 소식이 나간 답장을 판정: 그 전의 말
             self.assertEqual((st["stage"], st["crisis_news"], st["crisis_msgs"]), (5, True, 0), route)
             r, st = step(st, "가지 마", "*본다.* …", flags=["sincere"])  # 소식 뒤 진심
-            self.assertEqual((st["stage"], r["pending_event"]), (6, "STAGE_UP_6"), route)
+            self.assertEqual((st["stage"], r["pending_event"]), (5, "LOVERS_ASK"), route)  # S7
 
     def test_news_then_sincere_wins(self):
         for route in ("tease", "care"):
             _, st = step(crisis_start(route), "응", NEWS[route])
             self.assertTrue(st["crisis_news"])
             r, st = step(st, "너 없으면 안 돼", "*본다.* …", flags=["sincere"])
-            self.assertEqual(st["stage"], 6, route)
+            self.assertEqual((st["stage"], st["lovers"]), (5, "ask"), route)
 
     def test_watch_only_after_news(self):
         for route in ("tease", "care"):
@@ -85,7 +85,7 @@ class CrisisNewsTest(unittest.TestCase):  # A
     def test_news_in_batch(self):
         st = crisis_start("care")
         r, st = step(st, "응\n가지 마", NEWS["care"] + "\n" + OFF_SCRIPT, flags=["pursue"])  # 소식 뒤 한 개
-        self.assertEqual(st["stage"], 6)
+        self.assertEqual((st["stage"], st["lovers"]), (5, "ask"))
         r, st = step(crisis_start("care"), "응\n가지 마", OFF_SCRIPT + "\n" + NEWS["care"], flags=["pursue"])
         self.assertEqual((st["stage"], st["crisis_news"], st["crisis_msgs"]), (5, True, 0))  # 둘 다 소식 전
 

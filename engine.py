@@ -29,11 +29,11 @@ STAGE_EVENTS = {  # 무작위 사건. 마리·태오는 차례·단계 범위(SI
     6: ["STORM", "ROOFTOP", "BLACKOUT", "INJURY"],  # 연인 일상(S4-1: DATE 위장 연인은 뺌, 겪은 갈래 장면도 뺌). 마리·태오 마무리는 첫 아침 뒤 따로 한 번
 }
 ALLOWED_FLAGS = {"care", "protect", "outside", "sincere", "pursue", "tease", "comfort", "reveal_secret1",
-                 "refuse_name", "apologize", "withdraw"}
+                 "refuse_name", "apologize", "withdraw", "lovers_yes", "lovers_later"}
 # S2 유저 이름: 3단계에 오르며 이름으로 부르고 싶다고 묻고, 거절하면 관계가 흔들린다 (본편만)
 NAME_STATES = ("none", "asked", "accepted", "refused", "forgiven", "closed")
 NAME_FLAGS = {"refuse_name", "apologize"}  # 판정 flags 로만 쓰고 stage_flags 에는 넣지 않음
-JUDGE_ONLY_FLAGS = NAME_FLAGS | {"withdraw"}  # S4-1 withdraw: 엇갈림에서 사과·진심을 거둠(판정 flags 로만)
+JUDGE_ONLY_FLAGS = NAME_FLAGS | {"withdraw", "lovers_yes", "lovers_later"}  # S4-1 withdraw: 엇갈림에서 사과·진심을 거둠(판정 flags 로만)
 NAME_EVENTS = {"NAME_REFUSED", "NAME_FORGIVEN", "NAME_REFUSED_AGAIN"}
 NAME_REFUSE_PENALTY = 10        # 첫 거절: 호감 -10, 2단계로
 NAME_REFUSE_AGAIN_PENALTY = 25  # 사과받은 뒤 또 거절: 호감 -25, 다시는 이름 안 부름
@@ -126,6 +126,20 @@ HINT_LOOKBACK = 6          # /chat: 최근 서아 답장 이만큼에 그 줄이
 # S4-B 위기 → 연인 / 엇갈림 → 화해 (본편 5단계)
 CRISIS_STATES = ("none", "on", "rift", "done")
 CRISIS_EVENTS = {"CRISIS", "RIFT_START", "RECONCILE_OPEN"}
+# S7 연인 확정: 마음 확인(위기 성공·화해 성공) 뒤 서아가 관계를 묻고(ask), 유저가 받아 주면 6단계. 본편만
+LOVERS_STATES = ("none", "ask", "wait", "done")
+LOVERS_LABEL = "고백"        # lovers 가 ask·wait 일 때 stage_label
+LOVERS_EVENTS = {"LOVERS_ASK", "LOVERS_AGAIN"}
+LOVERS_AGAIN_MSGS = 3        # 망설인 뒤(wait) 유저 메시지 이만큼마다 한 번 더 물음(원고 5절)
+LOVERS_ASKS_MAX = 2          # 다시 묻기 최대 횟수. 그 뒤는 묻지 않고 lovers_yes 만 기다림
+LOVERS_ASK_TRIES = 3         # 물음(1절)이 답장에 안 나올 때 LOVERS_ASK 를 넣는 횟수 상한(첫 답장 포함)
+LOVERS_KEYS = {  # 공백 뺀 답장에 있으면 그 원고 대사가 나온 것
+    "LOVERS_ASK_TEASE": "진짜로만날래", "LOVERS_ASK_CARE": "옆에있고싶어", "LOVERS_ASK_RECONCILE": "나랑만나줄래",
+    "LOVERS_YES_TEASE": "취소없기다", "LOVERS_YES_CARE": "다행이다.진짜로", "LOVERS_YES_RECONCILE": "진작그렇게말하지",
+    "LOVERS_PROPOSED": "내가먼저하려던말", "LOVERS_LATER": "대답은천천히", "LOVERS_AGAIN": "그래서,대답은",
+}
+LOVERS_YES_LINES = {"LOVERS_YES_TEASE", "LOVERS_YES_CARE", "LOVERS_YES_RECONCILE", "LOVERS_PROPOSED"}
+LOVERS_JUDGE_LINE = {"ask": "서아가 관계를 물음", "wait": "대답을 기다림"}
 CRISIS_LOCATIONS = {"tease": "네온 골목", "care": "바 옥상"}
 CRISIS_NEWS_KEYS = {"tease": "새벽에떠나래", "care": "새벽에떠나"}  # S6: 판정한 답장(공백 뺌)에 이게 있어야 위기 소식이 나간 것
 CRISIS_NEWS_TRIES = 3      # S6: 소식이 안 나오면 CRISIS 를 다시 넣는 횟수 상한(첫 답장 포함). 넘으면 나간 것으로 보고 진행(무한 미룸 방지)
@@ -148,6 +162,7 @@ NIGHT_END_AFTER = 8         # S6(임시, 5→8): 상징 장면 답장 다음부�
 NIGHT_WAIT_MAX = 6          # 예전 앱처럼 「[다음 밤]」이 안 오면 유저 메시지 이만큼 뒤 서버가 밤을 넘김(첫마디 없이)
 NIGHT_LOCATION = "바 '라스트 오더' 1층"
 WON_KEYS = {"WON_TEASE": "연기아니지", "WON_CARE": "내려가자", "WON_RECONCILE": "늦었잖아"}  # won_line 에 올 수 있는 블록 이름(S4-1-1: 「이미 나왔나」는 WON_SHOWN 으로 봄)
+# S7: won_line 은 다음 답장 앞에 넣을 블록. 연인 확정 대사(2·3절)도 오고, 둘이면 「+」로 이음(예: WON_CARE+LOVERS_PROPOSED)
 # S4-1: 판정한 답장에 성공 대사가 통째로 나왔으면(공백 빼고 모두 있음) 판정 flags 가 비어도 마음을 확인한 것으로 봄
 WON_SHOWN = {"WON_TEASE": ("연기아니지",), "WON_CARE": ("내려가자", "같이"), "WON_RECONCILE": ("늦었잖아", "왔으니까")}
 CRISIS_JUDGE_NOTE = ("[위기 판정] 서아가 새벽에 떠난다는 소식을 꺼낸 뒤다. 유저가 진심을 말하거나, 가지 말라고 붙잡거나, "
@@ -265,6 +280,9 @@ def new_state() -> dict:
         "stage_up_due": None,     # S6: 단계가 올라 상징 장면(STAGE_UP_n)을 기다리는 단계 번호. 답장에 나온 것을 판정이 확인하면 None
         "stage_up_msgs": 0,       # S6: 상징 장면을 확인했을 때의 stage_user_msgs (밤 마무리는 그 뒤 메시지 수로 셈)
         "crisis_news": False,     # S6: 위기 소식(새벽에 떠나) 답장이 실제로 나간 것을 판정이 확인함. 그 전에는 마음 확인·셈 없음
+        "lovers": "none",         # S7: LOVERS_STATES. ask 서아가 관계를 물음 · wait 유저가 망설여 기다림 · done 연인 확정(6단계)
+        "lovers_msgs": 0,         # S7: wait 동안 센 유저 메시지 수(다시 묻기마다 0부터)
+        "lovers_asks": 0,         # S7: 다시 묻기(LOVERS_AGAIN)를 넣은 횟수 (최대 LOVERS_ASKS_MAX)
     }
 
 
@@ -291,7 +309,9 @@ def name_call(state: dict) -> str:
 
 
 def stage_label(state: dict) -> str:
-    """S4: 앱 표시용 단계 이름. 엇갈림이면 「엇갈림」."""
+    """S4: 앱 표시용 단계 이름. 엇갈림이면 「엇갈림」, S7: 연인 확정을 묻는 중이면 「고백」."""
+    if state.get("lovers") in ("ask", "wait") and not state.get("episode"):
+        return LOVERS_LABEL
     return RIFT_LABEL if state.get("crisis") == "rift" else STAGE_NAMES[state["stage"]]
 
 
@@ -301,6 +321,10 @@ def judge_soon(state: dict) -> bool:
         return True
     if state.get("episode"):
         return False
+    if state.get("lovers") == "ask":
+        return True  # S7: 물음 답장·대답을 바로 판정
+    if state.get("lovers") == "wait":
+        return False  # S7: 기다리는 동안은 묶음 판정
     if state.get("stage_up_due"):
         return True  # S6: 상징 장면 답장을 바로 판정해 나왔는지 확인
     scene = state.get("scene")
@@ -382,12 +406,27 @@ def normalize_state(raw: dict | None) -> dict:
         state["crisis"] = "none"
     if not state["episode"]:
         state["departure_days_left"] = None  # 키만 남김(앱 호환). 본편에서 더는 쓰지 않음
-        if state["stage"] == 5 and state["crisis"] not in ("on", "rift"):
+        if state["lovers"] not in LOVERS_STATES:
+            state["lovers"] = "none"
+        if "lovers" not in raw and state["stage"] == 6:
+            state["lovers"] = "done"  # S7 전 저장: 이미 연인
+        if state["stage"] == 5 and state["lovers"] in ("ask", "wait"):
+            state["crisis"] = "done"  # S7: 마음은 확인했고 연인 확정을 기다림
+        elif state["stage"] == 5 and state["crisis"] not in ("on", "rift"):
             state["crisis"] = "on"
         elif state["stage"] < 5:
             state["crisis"] = "none"
         elif state["stage"] == 6:
             state["crisis"] = "done"
+        if state["stage"] == 6:
+            state["lovers"] = "done"
+        elif state["stage"] < 5 or state["crisis"] != "done":
+            state["lovers"] = "none"
+    else:
+        state["lovers"] = "none"
+    state["lovers_msgs"] = max(0, state["lovers_msgs"]) if state["lovers"] == "wait" else 0
+    state["lovers_asks"] = max(0, min(LOVERS_ASKS_MAX, state["lovers_asks"])) if state["lovers"] in ("ask", "wait") else 0
+
     state["rewind_offer"] = state["rewind_offer"] is True
     due = raw.get("stage_up_due")
     state["stage_up_due"] = (due if type(due) is int and due == state["stage"] and due in STAGE_UP_SCENES
@@ -402,7 +441,8 @@ def normalize_state(raw: dict | None) -> dict:
         except (TypeError, ValueError):
             state["crisis_news"] = False
     state["rift_sorry"] = state["rift_sorry"] is True and state["crisis"] == "rift"
-    if state["won_line"] not in WON_KEYS:
+    if not (isinstance(state["won_line"], str) and state["won_line"]
+            and all(x in WON_KEYS or x in LOVERS_YES_LINES for x in state["won_line"].split("+"))):
         state["won_line"] = None
     ev = state["pending_event"]
     if isinstance(ev, str):
@@ -410,7 +450,8 @@ def normalize_state(raw: dict | None) -> dict:
         if ev == "DEPARTURE" and not state["episode"]:
             ev = "CRISIS"  # 예전 앱이 5단계에 막 오른 상태를 보내면 위기 장면으로
         known = ({e for v in STAGE_EVENTS.values() for e in v} | ROUTE_SCENES | SIDE_EVENTS | set(SIDE_CHARS)
-                 | {f"STAGE_UP_{n}" for n in STAGE_UP_SCENES} | NAME_EVENTS | CRISIS_EVENTS | {"NIGHT_END"})
+                 | {f"STAGE_UP_{n}" for n in STAGE_UP_SCENES} | NAME_EVENTS | CRISIS_EVENTS | {"NIGHT_END"}
+                 | (set() if state["episode"] else LOVERS_EVENTS))
         state["pending_event"] = ev if ev in known else None  # DEPARTURE·DAYS_LEFT_*·LAST_NIGHT 는 버림(S4)
     else:
         state["pending_event"] = None
@@ -827,7 +868,9 @@ class Engine:
                 state["night_wait"] += len(msgs)
                 if state["night_wait"] >= NIGHT_WAIT_MAX:
                     self._next_night(state, changes, f"「{NEXT_NIGHT}」 없이 메시지 {state['night_wait']}개")
-        if not state["episode"] and stage_before == 5:
+        if not state["episode"] and stage_before == 5 and state["lovers"] in ("ask", "wait"):
+            self._lovers(state, judge, last_reply, len(msgs), changes, fallback)  # S7 연인 확정
+        elif not state["episode"] and stage_before == 5:
             self._crisis(state, judge, last_reply, len(msgs), changes, fallback, name_sorry)
         if not state["episode"]:  # S3·S4-1: 끝난 단계(정상으로 오른 때만, _advance 가 목록에 넣음)
             state["stage_note_due"] = state["stage_note_queue"][0]["stage"] if state["stage_note_queue"] else None
@@ -933,8 +976,9 @@ class Engine:
             parts.append(render(self.blocks["GIFT_MOMENT"], values))
         if state["day"] == 1 and state.get("_first_night", True):  # 앱 37 골목 프롤로그: 첫날 밤, 처음 몇 턴만(계속 넣으면 매 답장에 손등의 피가 나옴)
             parts.append(self.blocks["FIRST_NIGHT"])
+        if state.get("lovers") not in ("ask", "wait"):  # S7: 연인 확정 중에는 「새벽에 떠나야 한다」 위기 지침을 넣지 않음
+            parts.append(render(self.blocks[f"STAGE_{state['stage']}"], values))
         parts += [
-            render(self.blocks[f"STAGE_{state['stage']}"], values),
             render(self.blocks["MOTION_BLOCK"], values),
             self.blocks["OUTPUT_FORMAT"],
         ]
@@ -1004,7 +1048,9 @@ class Engine:
         route = (state.get("route") or "care").upper()
         crisis, used = state.get("crisis"), state.get("used_events") or {}
         if event == "STAGE_UP_6" and state.get("won_line"):
-            return [self.blocks[state["won_line"]]]
+            return [self.blocks[x] for x in state["won_line"].split("+")]
+        if state.get("lovers") in ("ask", "wait") and state["stage"] == 5:
+            return self._lovers_parts(state, event)
         if crisis == "on" and state["stage"] == 5:
             parts = [self.blocks[f"CRISIS_{route}"]]
             if event != "CRISIS" and state.get("crisis_news"):  # S6: 소식이 나간 것을 확인한 뒤에만(그 전의 진심은 성공이 아님)
@@ -1098,7 +1144,8 @@ class Engine:
         """갈래 사건: 그 단계에서 호감이 기준에 닿으면 한 번(앱 51).
         S4-1: 2단계는 유저가 먼저 밖에 나가자고 하면(이번 판정 outside) 호감 기준 전이라도 시작. route 가 없으면 서버가 정함."""
         route, stage = state["route"], state["stage"]
-        if state["ending"] or state["pending_event"] or state["scene"] or stage not in ROUTE_EVENTS:
+        if (state["ending"] or state["pending_event"] or state["scene"] or stage not in ROUTE_EVENTS
+                or state.get("lovers") in ("ask", "wait")):
             return None
         if stage in NIGHT_END_STAGES and (f"NIGHT_END_{stage}" not in state["used_events"] or state["night_next"]):
             return None  # S4-C: 2·3단계 갈래 장면은 밤을 넘긴 다음 밤에
@@ -1166,7 +1213,7 @@ class Engine:
             state["crisis_msgs"] += post
             won = f"WON_{route.upper()}"
             if flags & {"sincere", "pursue"} or self._won_shown(won, shown):
-                self._won(state, won, shown, changes, "위기에서 마음 확인")
+                self._won(state, won, shown, changes, "위기에서 마음 확인", flags)
             elif state["crisis_msgs"] >= CRISIS_MAX_MSGS:
                 state["crisis"], state["crisis_msgs"] = "rift", 0
                 state["affection"] = RIFT_AFFECTION
@@ -1214,7 +1261,7 @@ class Engine:
             state["affection"] = max(state["affection"], RECONCILE_MIN_AFFECTION)
             why = "엇갈림에서 화해" + ("" if flags & {"apologize", "sincere"} else " (앞서 받은 사과·진심)")
             state["rift_sorry"] = False
-            self._won(state, "WON_RECONCILE", shown, changes, why)
+            self._won(state, "WON_RECONCILE", shown, changes, why, flags)
         elif (not state["stage_hints"] and not state["rift_sorry"]
               and state["crisis_msgs"] - state["hint_msgs"] >= RECONCILE_HINT_MSGS):
             self._set_hint(state, "HINT_6", state["crisis_msgs"], changes)
@@ -1326,12 +1373,106 @@ class Engine:
             state["crisis_msgs"] = 0
         changes.append(f"다음 밤 ({why}): {state['day']}일째 밤, {nxt}")
 
-    def _won(self, state: dict, won: str, shown: str, changes: list[str], why: str) -> None:
-        """마음 확인 → 6단계. 성공 대사가 판정한 답장에 없었으면 다음 답장(STAGE_UP_6) 앞에 넣음."""
+    def _won(self, state: dict, won: str, shown: str, changes: list[str], why: str, flags: set | None = None) -> None:
+        """마음 확인. S7: 바로 6단계로 올리지 않고 서아가 관계를 묻는다(LOVERS_ASK, 5단계 그대로).
+        성공 대사가 판정한 답장에 없었으면 다음 답장 앞에 넣음. 같은 묶음에서 유저가 이미 사귀자고 했으면(lovers_yes)
+        물음을 건너뛰고 6단계(다음 답장: 원고 3절 → STAGE_UP_6)."""
         state["crisis"] = "done"
-        state["won_line"] = None if self._won_shown(won, shown) else won  # S4-1-1: 성공 판단과 같은 기준(WON_SHOWN)
-        changes.append(f"{why} → 6단계" + ("" if state["won_line"] else " (성공 대사가 이번 답장에 이미 나옴)"))
+        lines = [] if self._won_shown(won, shown) else [won]  # S4-1-1: 성공 판단과 같은 기준(WON_SHOWN)
+        said = "" if lines else " (성공 대사가 이번 답장에 이미 나옴)"
+        if "lovers_yes" in (flags or set()):
+            if LOVERS_KEYS["LOVERS_PROPOSED"] not in shown:
+                lines.append("LOVERS_PROPOSED")
+            state["won_line"] = "+".join(lines) or None
+            state["lovers"] = "done"
+            changes.append(f"{why} · 유저가 먼저 사귀자고 함 → 연인 확정, 6단계{said}")
+            self._advance(state, 6, changes)
+            return
+        state["won_line"] = "+".join(lines) or None
+        state["lovers"], state["lovers_msgs"], state["lovers_asks"] = "ask", 0, 0
+        state["pending_event"] = "LOVERS_ASK"
+        state["used_events"]["LOVERS_ASK"] = state["turn"]  # 물음 답장을 판정하는 차례는 그 전의 말
+        state["used_events"].pop("LOVERS_ASK_TRY", None)
+        state["stage_hints"], state["hint_msgs"], state["hint_due"] = 0, 0, None
+        changes.append(f"{why} → 연인 확정 묻기 (LOVERS_ASK){said}")
+
+    def _lovers(self, state: dict, judge: dict, last_reply: str, n_msgs: int, changes: list[str],
+                fallback: bool = False) -> None:
+        """S7 연인 확정(5단계, lovers ask·wait). 받아 주면(lovers_yes) 6단계, 망설이면(lovers_later) 기다리고
+        유저 메시지 LOVERS_AGAIN_MSGS 개마다 다시 묻기(최대 LOVERS_ASKS_MAX). 물음이 답장에 안 나왔으면 다시 넣음."""
+        flags, used = set(judge["flags"]), state["used_events"]
+        shown = re.sub(r"\s+", "", last_reply or "")
+        kind = self._lovers_kind(state)
+        yes, later = "lovers_yes" in flags, "lovers_later" in flags
+        if state["lovers"] == "ask":
+            if state["pending_event"] == "LOVERS_ASK":
+                used["LOVERS_ASK"] = state["turn"]
+                return  # 앱이 아직 물음 답장을 내지 않음
+            if not n_msgs:
+                return
+            post = self._event_after(state, "LOVERS_ASK", n_msgs, fallback)
+            first = state["turn"] < used["LOVERS_ASK"] + 2  # 물음 답장을 판정하는 차례
+            if first and (post < 0 or (LOVERS_KEYS[f"LOVERS_ASK_{kind}"] not in shown and not yes)):
+                tries = int(used.get("LOVERS_ASK_TRY") or 1)
+                if tries < LOVERS_ASK_TRIES:
+                    used["LOVERS_ASK_TRY"] = tries + 1
+                    state["pending_event"], used["LOVERS_ASK"] = "LOVERS_ASK", state["turn"]
+                    changes.append("연인 확정 물음이 답장에 없음 → 다음 답장에 다시")
+                    return
+                changes.append(f"연인 확정 물음이 {tries}번 안 나옴 → 나간 것으로 보고 진행")
+            if yes:  # 물음 답장을 판정하는 차례의 한 메시지는 묻기 전의 말 → 유저가 먼저 사귀자고 함(3절)
+                self._lovers_done(state, "LOVERS_PROPOSED" if first and post <= 0 else f"LOVERS_YES_{kind}",
+                                  shown, changes)
+            elif later and post > 0:
+                state["lovers"], state["lovers_msgs"] = "wait", 0
+                changes.append("연인 확정: 유저가 망설임 → 기다림 (원고 4절)")
+            return
+        if yes:  # wait
+            self._lovers_done(state, "LOVERS_PROPOSED" if state["lovers_asks"] >= LOVERS_ASKS_MAX
+                              else f"LOVERS_YES_{kind}", shown, changes)
+            return
+        if state["pending_event"] == "LOVERS_AGAIN":
+            return  # 앱이 아직 다시 묻기 답장을 내지 않음
+        state["lovers_msgs"] += n_msgs
+        if (state["lovers_msgs"] >= LOVERS_AGAIN_MSGS and state["lovers_asks"] < LOVERS_ASKS_MAX
+                and not state["pending_event"]):
+            state["pending_event"], used["LOVERS_AGAIN"] = "LOVERS_AGAIN", state["turn"]
+            state["lovers_asks"] += 1
+            state["lovers_msgs"] = 0
+            changes.append(f"연인 확정: 다시 묻기 LOVERS_AGAIN ({state['lovers_asks']}/{LOVERS_ASKS_MAX})")
+
+    def _lovers_done(self, state: dict, line: str, shown: str, changes: list[str]) -> None:
+        """S7: 연인 확정 → 6단계. 2·3절 대사가 판정한 답장에 없었으면 다음 답장(STAGE_UP_6) 앞에 넣음."""
+        said = any(LOVERS_KEYS[k] in shown for k in LOVERS_YES_LINES)
+        state["won_line"] = None if said else line
+        state["lovers"], state["lovers_msgs"] = "done", 0
+        changes.append("연인 확정 → 6단계" + (" (수락 대사가 이번 답장에 이미 나옴)" if said else f" ({line} 를 STAGE_UP_6 앞에)"))
         self._advance(state, 6, changes)
+
+    @staticmethod
+    def _lovers_kind(state: dict) -> str:
+        """S7: 연인 확정 원고 갈래. 엇갈림을 지나 화해했으면 RECONCILE, 아니면 갈래(없으면 CARE)."""
+        return "RECONCILE" if "RIFT_START" in state["used_events"] else (state.get("route") or "care").upper()
+
+    @staticmethod
+    def lovers_call(state: dict) -> str:
+        """S7 원고 {호칭}: 이름을 부를 수 있으면(name_state accepted·forgiven) 유저 이름만, 아니면 「사장님」."""
+        name = state.get("user_name") or ""
+        return name if name and state.get("name_state") in ("accepted", "forgiven") else "사장님"
+
+    def _lovers_parts(self, state: dict, event: str | None) -> list[str]:
+        """S7: 물음(LOVERS_ASK)·다시 묻기(LOVERS_AGAIN) 답장에는 그 블록, 그 밖의 답장에는 LOVERS_WATCH(갈래 줄만)."""
+        kind = self._lovers_kind(state)
+        if event == "LOVERS_ASK":
+            lines = state["won_line"].split("+") if state.get("won_line") else []
+            parts = [self.blocks[x] for x in lines if x in WON_KEYS]
+            return parts + [self.blocks[f"LOVERS_ASK_{kind}"].replace("{호칭}", self.lovers_call(state))]
+        if event == "LOVERS_AGAIN":
+            return [self.blocks["LOVERS_AGAIN"]]
+        tag = f"[{kind.lower()}] "
+        rows = self.blocks["LOVERS_WATCH"].split("\n")
+        return ["\n".join(x[len(tag):] if x.startswith(tag) else x for x in rows
+                          if not x.startswith("[") or x.startswith(tag))]
 
     @staticmethod
     def _set_hint(state: dict, name: str, msgs: int, changes: list[str]) -> None:
@@ -1348,7 +1489,7 @@ class Engine:
         st, msgs = state["stage"], state["stage_user_msgs"]
         name = HINT_OF_STAGE.get(st)
         if (not name or state["ending"] or state["pending_event"] or state["scene"] or state["night_next"]
-                or cls._name_scene_quiet(state)):
+                or cls._name_scene_quiet(state) or state.get("lovers") in ("ask", "wait")):
             return
         if msgs < MIN_STAGE_MSGS.get(st, 0) or state["stage_hints"] >= HINT_MAX:
             return
@@ -1387,6 +1528,8 @@ class Engine:
             return None  # 이미 예약된 사건이 있거나(예전) 실패 엔딩 뒤, 또는 밤 마무리 중(S4-C, 한 번 답하는 답장에도 사건 없음)
         if state["scene"]:
             return None  # S4-1: 열린 갈래 장면(필수 사건)에는 무작위 사건·조연을 끼우지 않음
+        if state["lovers"] in ("ask", "wait"):
+            return None  # S7: 연인 확정 중에는 무작위 사건·조연 없음
         if self._name_scene_quiet(state):
             return None  # S2-1: 이름 장면 중·직후에는 무작위 사건(조연 포함)을 끼우지 않음 stayed 뒤에는 연인 일상 사건이 이어짐
         if state["stage"] == 6 and state["route"] and state["ending"] != "stayed":
@@ -1512,6 +1655,8 @@ class Engine:
             f"호감도: {state['affection']}, {state['day']}일째 {state['time_of_day']}, "
             f"장소: {state['location']}"
             + ("" if state["episode"] else f", 이름 부르기: {self._judge_name_call(state)}")
+            + (f", 연인 확정: {LOVERS_JUDGE_LINE[state['lovers']]}"
+               if not state["episode"] and state["lovers"] in LOVERS_JUDGE_LINE else "")
             + f"\n\n[지금까지의 요약]\n{state['summary'] or '없음'}"
         )
         if need_summary:
@@ -1640,7 +1785,7 @@ class Engine:
                 state["night_next"], state["night_card"], state["night_wait"] = None, None, 0
                 state["pending_event"] = None
                 changes.append("밤 마무리를 이름 장면 뒤로 미룸")
-            if state["pending_event"] not in CRISIS_EVENTS | ROUTE_SCENES:  # 위기·필수 사건은 밀어내지 않음
+            if state["pending_event"] not in CRISIS_EVENTS | ROUTE_SCENES | LOVERS_EVENTS:  # 위기·필수·연인 확정 사건은 밀어내지 않음
                 state["pending_event"] = name
 
         def lose(points: int) -> None:

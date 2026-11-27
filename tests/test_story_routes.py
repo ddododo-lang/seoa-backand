@@ -147,7 +147,7 @@ class DepartureTest(unittest.TestCase):  # 3·6 (S4: 남은 날·실패 엔딩 �
         st = normalize_state({"stage": 5, "affection": 76, "departure_days_left": 3, "ending": None, "route": "care"})
         self.assertEqual((st["crisis"], st["ending"]), ("on", None))  # 예전 5단계 저장은 위기 중으로
         r = judge(st, "가지 마.", flags=["pursue"])
-        self.assertEqual(r["state"]["stage"], 6)
+        self.assertEqual((r["state"]["stage"], r["state"]["lovers"]), (5, "ask"))  # S7
 
     def test_rewind_rule_and_strict_day(self):
         e = engine()

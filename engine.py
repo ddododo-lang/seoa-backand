@@ -139,7 +139,7 @@ NIGHT_NEXT = {  # night_next → (시간 카드 문구 night_card, 넘기는 날
     "RIFT_NIGHT": ("며칠 뒤 밤", 3, None),  # 마무리는 RIFT_START 가 대신함
 }
 NIGHT_END_STAGES = (2, 3)
-NIGHT_END_AFTER = 5         # 그 단계 유저 메시지(상징 장면을 받은 메시지 + 그 뒤 4개)
+NIGHT_END_AFTER = 8         # S6(임시, 5→8): 상징 장면 답장 다음부터 그 단계 유저 메시지 수 (첫 밤이 너무 빨리 끝남)
 NIGHT_WAIT_MAX = 6          # 예전 앱처럼 「[다음 밤]」이 안 오면 유저 메시지 이만큼 뒤 서버가 밤을 넘김(첫마디 없이)
 NIGHT_LOCATION = "바 '라스트 오더' 1층"
 WON_KEYS = {"WON_TEASE": "연기아니지", "WON_CARE": "내려가자", "WON_RECONCILE": "늦었잖아"}  # won_line 에 올 수 있는 블록 이름(S4-1-1: 「이미 나왔나」는 WON_SHOWN 으로 봄)
@@ -914,6 +914,8 @@ class Engine:
         night = self._night_block(state, event)
         if night:  # S4-C: 밤 마무리(NIGHT_END) 또는 「[다음 밤]」 첫마디. 이 답장에는 갈래 장면을 잇지 않음
             parts.append(self.blocks[night])
+        elif not event and state.get("night_next") in NIGHT_NEXT and NIGHT_NEXT[state["night_next"]][2]:
+            parts.append(self._after_night_end_line(state["night_next"]))  # S6: 마무리 다음 답장은 짧게 한 번만 받음
         elif event and f"EVENT_{event}" in self.blocks:  # 이번 답장의 사건(시작 턴)
             parts.append(render(self.blocks[f"EVENT_{event}"], values))  # NAME_FORGIVEN 은 {{user_name}}
         elif event and event.startswith("STAGE_UP_") and event in self.blocks:
@@ -941,6 +943,11 @@ class Engine:
         picked = [line.split("] ", 1)[1] for line in lines if line.startswith(f"[{key}] ")]
         head = [line for line in lines if not line.startswith("[")]
         return render("\n".join(head + picked), values)
+
+    def _after_night_end_line(self, nxt: str) -> str:
+        """S6: 밤 마무리 블록의 「그다음 유저 답장에는 …」 줄(원문 그대로). 마무리 다음 답장에만 따로 넣음."""
+        block = self.blocks[NIGHT_NEXT[nxt][2]]
+        return next(x for x in block.split("\n") if x.startswith("그다음 유저 답장에는"))
 
     @staticmethod
     def _night_block(state: dict, event: str | None) -> str | None:

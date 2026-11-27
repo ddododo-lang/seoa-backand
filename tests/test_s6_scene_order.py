@@ -196,5 +196,50 @@ class StageUpOrderTest(unittest.TestCase):  # B
             self.assertIsNone(r["state"]["stage_up_due"])
 
 
+
+class FarewellOnceTest(unittest.TestCase):  # C
+    C1 = "이 장면 안에서 서아가 먼저 집에 가겠다·내일 보자고 작별하지 않는다. 작별은 밤 마무리에서 한 번만 한다."
+    C2 = ("작별 인사는 이 답장에서 한 번만. 새 질문·한 잔 더 같은 새 제안을 꺼내지 않는다.",
+          "그다음 유저 답장에는 짧게 한 번만 받고(한 문장 대사), 다시 작별을 반복하지 않는다.")
+
+    def test_scene_blocks(self):
+        e = engine()
+        for name in ("EVENT_DATE", "EVENT_WALK_HOME"):
+            self.assertIn(self.C1, e.blocks[name])
+        for name in ("EVENT_ROOFTOP", "EVENT_STORM", "EVENT_ALLEY"):
+            self.assertNotIn(self.C1, e.blocks[name])
+        st = {"stage": 2, "route": "care", "day": 2, "scene": "WALK_HOME", "scene_msgs": 1,
+              "used_events": {"NIGHT_END_2": 1, "ROUTE_WALK_HOME": 2}}
+        self.assertIn(self.C1, system_for(st))
+
+    def test_night_end_blocks(self):
+        e = engine()
+        for name in ("NIGHT_END_1", "NIGHT_END_TEASE", "NIGHT_END_CARE"):
+            for line in self.C2:
+                self.assertIn(line, e.blocks[name])
+        for name in ("NIGHT_START_2", "NIGHT_START_3_CARE"):
+            self.assertNotIn(self.C2[0], e.blocks[name])
+        st = {"stage": 3, "route": "care", "pending_event": "NIGHT_END", "night_next": "NIGHT_START_3_CARE"}
+        s = system_for(st)
+        self.assertIn("…바래다준 거, 고마웠어.", s)
+        self.assertIn(self.C2[1], s)
+        after = system_for(dict(st, pending_event=None))  # 마무리 다음 답장(시간 카드 전 한 번)
+        self.assertIn(self.C2[1], after)
+        self.assertNotIn("…바래다준 거, 고마웠어.", after)
+        self.assertNotIn(self.C2[1], system_for({"stage": 3, "route": "care"}))
+        self.assertNotIn(self.C2[1], system_for({"stage": 5, "crisis": "rift", "night_next": "RIFT_NIGHT"}))
+
+    def test_night_end_after_8(self):
+        from engine import Engine
+        self.assertEqual(NIGHT_END_AFTER, 8)
+        for stage, route in ((2, None), (3, "tease")):
+            st = normalize_state({"stage": stage, "route": route, "stage_user_msgs": 1 + 7, "stage_up_msgs": 1})
+            Engine._night_end(st, [])  # 상징 장면 답장 뒤 7개
+            self.assertIsNone(st["pending_event"], stage)
+            st = normalize_state({"stage": stage, "route": route, "stage_user_msgs": 1 + 8, "stage_up_msgs": 1})
+            Engine._night_end(st, [])  # 8개
+            self.assertEqual(st["pending_event"], "NIGHT_END", stage)
+
+
 if __name__ == "__main__":
     unittest.main()

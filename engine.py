@@ -119,6 +119,7 @@ MIN_STAGE_MSGS = {1: 3, 2: 9, 3: 9, 4: 6}  # 그 단계에서 이만큼 유저 �
 HINT_OF_STAGE = {1: "HINT_1", 2: "HINT_2", 3: "HINT_3", 4: "HINT_4"}
 HINT_BLOCKS = {"HINT_1", "HINT_2", "HINT_3", "HINT_4", "HINT_5", "HINT_6"}  # 5: 위기 3턴째 · 6: 엇갈림 → 화해
 HINT_MAX = 2
+HINT_STAGE = {"HINT_1": 1, "HINT_2": 2, "HINT_3": 3, "HINT_4": 4, "HINT_5": 5, "HINT_6": 5}  # S6: 그 힌트가 나올 단계
 HINT_AGAIN_MSGS = 10
 HINT_LOOKBACK = 6          # /chat: 최근 서아 답장 이만큼에 그 줄이 이미 있으면 다시 넣지 않음
 # S4-B 위기 → 연인 / 엇갈림 → 화해 (본편 5단계)
@@ -537,7 +538,8 @@ class Engine:
         state["_night"] = night
         if night:
             event = None
-        state["_hint"] = None if event or night else self._hint_now(state["hint_due"], history)
+        state["_hint"] = (None if event or night or self._hint_stale(state, state["hint_due"])
+                          else self._hint_now(state["hint_due"], history))  # S6: 넣기 직전에 단계·조건을 다시 봄
         pose_id = self._pose_request(user_message, motion_list)
         photo = self._photo_due(state, event, night, user_message, history, pose_id) if photo_on else None
         system = self._build_system(state, event, motion_list)
@@ -627,6 +629,30 @@ class Engine:
         key = re.sub(r"\s+", "", self.hint_line(name))[:12]
         recent = [str(h.get("t") or "") for h in history if h.get("r") == "c"][-HINT_LOOKBACK:]
         return None if any(key in re.sub(r"\s+", "", t) for t in recent) else name
+
+    @staticmethod
+    def _hint_stale(state: dict, name: str | None) -> bool:
+        """S6: 예약된 속마음 힌트가 이제 맞지 않으면 True. 단계가 바뀌었거나, 그 힌트가 가리키는 조건이 이미 찼을 때.
+        HINT_1 care·protect · HINT_2 outside 또는 2단계 갈래 장면 시작 · HINT_3 sincere · HINT_4 그 골목 시작 ·
+        HINT_5 위기가 끝남 · HINT_6 엇갈림이 끝났거나 사과·진심을 이미 받음."""
+        if not name:
+            return False
+        if HINT_STAGE.get(name) != state["stage"]:
+            return True
+        flags, used = set(state["stage_flags"]), state["used_events"]
+        if name == "HINT_1":
+            return bool(flags & {"care", "protect"})
+        if name == "HINT_2":
+            return "outside" in flags or any(f"ROUTE_{e}" in used for e in ROUTE_EVENTS[2].values())
+        if name == "HINT_3":
+            return "sincere" in flags
+        if name == "HINT_4":
+            return "ROUTE_ALLEY" in used
+        if name == "HINT_5":
+            return state["crisis"] != "on"
+        if name == "HINT_6":
+            return state["crisis"] != "rift" or bool(state["rift_sorry"])
+        return False
 
     @staticmethod
     def _open_moments(moments: list[dict], history: list[dict], user_message: str = "") -> list[dict]:
@@ -1324,6 +1350,8 @@ class Engine:
             return
         if msgs < MIN_STAGE_MSGS.get(st, 0) or state["stage_hints"] >= HINT_MAX:
             return
+        if cls._hint_stale(state, name):
+            return  # S6: 그 힌트가 가리키는 것을 이미 함(예: 치료한 뒤 「신경 써 주려나」)
         if state["stage_hints"] and msgs - state["hint_msgs"] < HINT_AGAIN_MSGS:
             return
         state["hint_due"], state["hint_msgs"] = name, msgs

@@ -283,5 +283,58 @@ class MoveTest(unittest.TestCase):  # D
         self.assertEqual(out["location"], "바 옥상")  # 모델이 직접 옮긴 것은 그대로(프롬프트 D1 로 이끎)
 
 
+
+class InnerThoughtAndHintTest(unittest.TestCase):  # E
+    HINT1 = "…이 사람, 이런 상처 같은 것도 신경 써 주려나."
+
+    def test_prompt_lines(self):
+        e = engine()
+        base = e.blocks["BASE_SYSTEM"]
+        e2 = ("유저 메시지의 괄호( ) 안은 유저의 행동·표정·속마음이다. 행동과 표정은 서아가 본 것으로 받는다. "
+              "속마음(「속으로」「생각한다」「~싶었는데」처럼 말하지 않은 생각)은 서아가 알 수 없으니, 들은 것처럼 대답하지 않는다. "
+              "보이는 표정만 받는다.")
+        self.assertIn(e2, base)
+        self.assertLess(base.index("# 지문"), base.index(e2))
+        self.assertLess(base.index(e2), base.index("# 단계별 말투와 스킨십"))
+        self.assertIn("유저가 말하지 않은 속마음(괄호 속 생각)만으로는 점수나 플래그를 주지 않는다.", e.blocks["JUDGE_SYSTEM"])
+
+    def reply_system(self, state):
+        llm = Stub()
+        engine(llm).reply(state, "(음 조금은 아쉽네. 오늘은 조금 더 가까워지고 싶었는데)", [], [])
+        return llm.system
+
+    def test_hint_with_condition_met_not_sent(self):
+        st = {"stage": 1, "affection": 8, "stage_user_msgs": 4, "hint_due": "HINT_1"}
+        self.assertIn(self.HINT1, self.reply_system(st))
+        self.assertNotIn(self.HINT1, self.reply_system(dict(st, stage_flags=["care"])))  # 구급상자로 치료한 뒤
+        self.assertNotIn(self.HINT1, self.reply_system(dict(st, stage_flags=["protect"])))
+
+    def test_hint_after_stage_change_not_sent(self):
+        st = {"stage": 2, "affection": 12, "stage_user_msgs": 1, "hint_due": "HINT_1"}
+        self.assertNotIn(self.HINT1, self.reply_system(st))
+        self.assertNotIn("장난 말고, 진짜 말 한마디.", self.reply_system({"stage": 4, "hint_due": "HINT_3"}))
+
+    def test_other_hint_conditions(self):
+        from engine import Engine
+        cases = [({"stage": 2, "stage_flags": ["outside"]}, "HINT_2"),
+                 ({"stage": 2, "used_events": {"ROUTE_WALK_HOME": 1}}, "HINT_2"),
+                 ({"stage": 3, "stage_flags": ["sincere"]}, "HINT_3"),
+                 ({"stage": 4, "used_events": {"ROUTE_ALLEY": 1}}, "HINT_4"),
+                 ({"stage": 6}, "HINT_5"),
+                 ({"stage": 5, "crisis": "rift", "rift_sorry": True}, "HINT_6")]
+        for raw, name in cases:
+            self.assertTrue(Engine._hint_stale(normalize_state(raw), name), name)
+        for raw, name in [({"stage": 2}, "HINT_2"), ({"stage": 3}, "HINT_3"), ({"stage": 4}, "HINT_4"),
+                          ({"stage": 5, "crisis": "on"}, "HINT_5"), ({"stage": 5, "crisis": "rift"}, "HINT_6")]:
+            self.assertFalse(Engine._hint_stale(normalize_state(raw), name), name)
+
+    def test_judge_does_not_book_met_hint(self):
+        r = engine(Stub({"flags": ["care"]})).judge({"stage": 1, "affection": 2, "stage_user_msgs": 3}, "(상처를 치료해 준다)",
+                                                   "*본다.* …그래.")
+        self.assertIsNone(r["state"]["hint_due"])
+        r = engine(Stub()).judge({"stage": 1, "affection": 2, "stage_user_msgs": 3}, "응", "*본다.* …그래.")
+        self.assertEqual(r["state"]["hint_due"], "HINT_1")
+
+
 if __name__ == "__main__":
     unittest.main()

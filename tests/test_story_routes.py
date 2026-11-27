@@ -105,7 +105,7 @@ class RouteEventsTest(unittest.TestCase):  # 2
         st = normalize_state({"stage": 3, "route": "care"})
         Engine._advance(st, 4, [])
         self.assertNotIn("비밀1", st["revealed_secrets"])  # 갈래가 있으면 「그 골목」 몫
-        r = judge(dict(st, affection=65, pending_event=None))
+        r = judge(dict(st, affection=65, pending_event=None, stage_up_due=None))  # S6: 상징 장면은 이미 나감
         self.assertEqual((r["pending_event"], r["state"]["revealed_secrets"]), ("ALLEY", ["비밀1"]))
         self.assertIn("배웅해 줬던 날", system_for(r["state"]))  # care 갈래만
         tease = judge({"stage": 4, "affection": 65, "route": "tease"})["state"]

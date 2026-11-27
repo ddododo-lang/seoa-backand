@@ -91,7 +91,7 @@ class CrisisWinTest(unittest.TestCase):
         r = engine(Stub({"flags": ["pursue"]})).judge(on("tease"), "가지 마.", "*고개를 든다.* " + WON["tease"])
         st = r["state"]
         self.assertEqual((st["stage"], st["crisis"], r["pending_event"], st["won_line"]), (6, "done", "STAGE_UP_6", None))
-        self.assertFalse(st["judge_soon"])
+        self.assertTrue(st["judge_soon"])  # S6: 상징 장면(STAGE_UP_6) 답장을 바로 판정해 확인
         s = system_for(st)
         self.assertIn(STAGE_UP_6, s)
         self.assertNotIn(WON["tease"], s)  # 같은 답장에 이미 나왔으니 다시 넣지 않음

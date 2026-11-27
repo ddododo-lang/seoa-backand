@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from engine import NIGHT_WAIT_MAX, Engine, normalize_state  # noqa: E402
+from engine import NIGHT_END_AFTER, NIGHT_WAIT_MAX, Engine, normalize_state  # noqa: E402
 from test_story_routes import Stub, engine, judge, system_for  # noqa: E402
 
 END_1 = "…내일도 열지, 이 바?"
@@ -17,6 +17,10 @@ START_3 = {"tease": "우리 그날 커플이었다고 소문났더라. …책임
 RIFT_FIRST = "…지나가다 들렀어. 오래는 안 있어."
 RULE = "유저 메시지 「[다음 밤]」은 유저의 말로 다루지 않는다."
 FIVE = "응\n그래\n그렇구나\n알았어\n음"
+
+
+def msgs(n):
+    return "\n".join(["응"] * n)
 
 
 class NoCallStub(Stub):
@@ -30,6 +34,7 @@ def after_1_to_2(**extra):
     st = normalize_state({"stage": 1, "affection": 12, "stage_flags": ["care"], "stage_user_msgs": 3})
     Engine._advance(st, 2, [])
     st["pending_event"] = None  # 앱이 STAGE_UP_2 답장 뒤 비움
+    st["stage_up_due"] = None  # S6: 상징 장면이 나간 것을 확인함(그 뒤부터 밤 마무리를 셈)
     st.update(extra)
     return st
 
@@ -42,9 +47,9 @@ def chat(state, msg="[다음 밤]", history=()):
 
 class NightEndTest(unittest.TestCase):
     def test_after_1_to_2(self):
-        r = judge(after_1_to_2(), "응\n그래\n그렇구나\n알았어")  # 4개(상징 장면을 받은 메시지 포함)
+        r = judge(after_1_to_2(), msgs(NIGHT_END_AFTER - 1))
         self.assertIsNone(r["pending_event"])
-        r = judge(after_1_to_2(), FIVE)  # 상징 장면 다음부터 4개
+        r = judge(after_1_to_2(), msgs(NIGHT_END_AFTER))  # S6: 상징 장면 답장 다음부터 NIGHT_END_AFTER 개
         st = r["state"]
         self.assertEqual((r["pending_event"], st["night_next"], st["night_card"]), ("NIGHT_END", "NIGHT_START_2", "2일째 밤"))
         out, system = chat(st, "잘 가")
@@ -67,8 +72,8 @@ class NightEndTest(unittest.TestCase):
             st = normalize_state({"stage": 2, "affection": 30, "route": route, "stage_user_msgs": 9,
                                   "stage_flags": ["outside"]})
             Engine._advance(st, 3, [])
-            st["pending_event"] = None
-            r = judge(st, FIVE)
+            st["pending_event"], st["stage_up_due"] = None, None  # 상징 장면이 나감(S6)
+            r = judge(st, msgs(NIGHT_END_AFTER))
             key = route or "care"
             self.assertEqual((r["pending_event"], r["state"]["night_next"], r["state"]["night_card"]),
                              ("NIGHT_END", f"NIGHT_START_3_{key.upper()}", "며칠 뒤 밤"), route)

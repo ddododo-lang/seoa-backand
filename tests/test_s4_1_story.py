@@ -95,10 +95,10 @@ class SceneDoneTest(unittest.TestCase):  # A3
 
     def test_location_moves_on_first_real_scene_reply(self):
         st = normalize_state({"stage": 3, "route": "tease", "scene": "STORM", "used_events": {"ROUTE_STORM": 1}})
-        out = engine().reply(st, "응", [], [])
+        out = engine(Stub(reply={"action": "당신을 따라 계단을 오른다."})).reply(st, "응", [], [])  # S6: 이동 대목이 있을 때
         self.assertEqual(out["location"], "바 '라스트 오더' 2층")
-        out = engine().reply(dict(st, scene_msgs=2, location="바 '라스트 오더' 1층"), "응", [], [])
-        self.assertIsNone(out["location"])  # 이미 시작된 장면은 모델에 맡김
+        out = engine().reply(dict(st, scene_msgs=3, location="바 '라스트 오더' 1층"), "응", [], [])
+        self.assertIsNone(out["location"])  # 이미 진행된 장면(세 번째 답장 뒤)은 모델에 맡김
 
     def test_no_random_event_during_scene(self):
         st = dict(night2("tease"), scene="DATE", scene_msgs=1, used_events={"NIGHT_END_2": 1, "ROUTE_DATE": 4},
@@ -175,6 +175,7 @@ class PromptStub(Stub):
 
 
 WON_CARE = "*난간에서 내려온다.* …내려가자. 같이."
+NEWS = "*휴대폰 화면을 끈다.* 태오야. 큰 건. 도시 밖. …새벽에 떠나래."  # S6: 위기 소식 답장(두 갈래 확인 기준을 모두 포함)
 RECONCILE = "*몸을 돌린다.* …늦었잖아. 그래도, 왔으니까."
 
 
@@ -196,7 +197,7 @@ class CrisisJudgeTest(unittest.TestCase):  # B1
     def test_sincere_before_crisis_does_not_win(self):
         st = crisis_start()
         self.assertEqual((st["stage"], st["crisis"]), (5, "on"))
-        _, st = step(st, "가지 마", flags=["sincere"])  # 소식 답장을 판정하는 차례(그 전 메시지)
+        _, st = step(st, "가지 마", NEWS, flags=["sincere"])  # 소식 답장을 판정하는 차례(그 전 메시지)
         self.assertEqual((st["stage"], st["crisis_msgs"]), (5, 0))
         _, st = step(st, "가지 마", flags=["pursue"])
         self.assertEqual(st["stage"], 6)
@@ -204,18 +205,18 @@ class CrisisJudgeTest(unittest.TestCase):  # B1
     def test_batch_after_news_counts(self):
         st = crisis_start()
         llm = PromptStub({"flags": ["pursue"]})
-        r = engine(llm).judge(st, "응\n가지 마\n여기 있어", REPLY)  # 첫째만 소식 전
+        r = engine(llm).judge(st, "응\n가지 마\n여기 있어", "\n".join([NEWS, REPLY, REPLY]))  # 첫째만 소식 전(S6: 앱은 답장을 모두 이어 보냄)
         self.assertEqual(r["state"]["stage"], 6)
         self.assertIn("[위기 판정]", llm.prompt)
         self.assertIn("첫 번째 유저 메시지는 서아가 소식을 꺼내기 전의 말이다", llm.prompt)
         self.assertIn("정확한 단어가 아니어도 sincere 또는 pursue", llm.prompt)
         st = crisis_start()
-        r, st = step(st, "응\n그렇구나\n음")
+        r, st = step(st, "응\n그렇구나\n음", "\n".join([NEWS, REPLY, REPLY]))
         self.assertEqual((st["stage"], st["crisis_msgs"]), (5, 2))
 
     def test_won_line_already_shown_counts(self):
         st = crisis_start()
-        _, st = step(st, "응")
+        _, st = step(st, "응", NEWS)
         r = engine(Stub()).judge(st, "…있어 줘", WON_CARE)  # 판정 flags 가 비어도 성공 대사가 나왔으면 성공
         self.assertEqual((r["state"]["stage"], r["state"]["won_line"], r["pending_event"]), (6, None, "STAGE_UP_6"))
 
@@ -228,7 +229,7 @@ class CrisisJudgeTest(unittest.TestCase):  # B1
 
     def test_six_fail_then_rift(self):
         st = crisis_start()
-        _, st = step(st, "응")
+        _, st = step(st, "응", NEWS)
         for _ in range(2):
             r, st = step(st)
         self.assertEqual((st["crisis"], r["pending_event"], st["rift_sorry"]), ("rift", "RIFT_START", False))

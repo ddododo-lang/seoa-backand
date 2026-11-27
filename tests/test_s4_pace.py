@@ -102,8 +102,8 @@ class HintTest(unittest.TestCase):  # A4
         self.assertIsNone(st["hint_due"])
 
     def test_again_after_10_and_max_two(self):
-        st = judge({"stage": 2, "affection": 20, "stage_user_msgs": 8, "route": "care",
-                    "used_events": {"NIGHT_END_2": 0, "ROUTE_WALK_HOME": 1}}, "응")["state"]  # S4-1: 장면은 마쳤고 호감이 모자람
+        st = judge({"stage": 2, "affection": 10, "stage_user_msgs": 8, "route": "care",
+                    "used_events": {"NIGHT_END_2": 0}}, "응")["state"]  # S6: 아직 밖에 안 나감(장면을 다녀왔으면 HINT_2 는 맞지 않음)
         self.assertEqual((st["hint_due"], st["stage_hints"], st["hint_msgs"]), ("HINT_2", 1, 9))
         st = judge(dict(st, stage_user_msgs=17, short_streak=0), "응")["state"]  # 9 + 9
         self.assertIsNone(st["hint_due"])

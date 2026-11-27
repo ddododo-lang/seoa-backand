@@ -53,7 +53,7 @@ def at_stage2_ready(**extra):  # 2→3 조건이 찬 2단계 (S4-1: 갈래 장�
 def asked_state():
     st = judge(at_stage2_ready(user_name="도윤"))
     st["pending_event"] = None  # 앱이 답장 뒤 비움
-    return judge(st)  # 물은 답장을 판정하는 차례: 아직 asked
+    return engine(Stub()).judge(st, "…", "*일어나지 않는다.* " + ASK)["state"]  # 물은 답장을 판정하는 차례: 아직 asked (S6: 물음이 답장에 나와야 함)
 
 
 class NormalizeTest(unittest.TestCase):
@@ -188,7 +188,7 @@ class NameFlowTest(unittest.TestCase):
 class NoNameTest(unittest.TestCase):
     def test_same_as_before(self):
         st = judge(at_stage2_ready())
-        self.assertEqual((st["stage"], st["name_state"], st["judge_soon"]), (3, "none", False))
+        self.assertEqual((st["stage"], st["name_state"], st["judge_soon"]), (3, "none", True))  # S6: 상징 장면 답장을 바로 판정
         s = system_for(st)
         self.assertIn(OLD_UP3, s)
         self.assertNotIn("이름 부르고 싶어", s)

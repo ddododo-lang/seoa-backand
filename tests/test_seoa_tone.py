@@ -60,7 +60,7 @@ class StormTest(unittest.TestCase):  # 2
 class StormLocationTest(unittest.TestCase):  # 2 (eval: 모델이 location 을 빠뜨려 앱 배경이 1층에 남음)
     def reply(self, location, pending="STORM"):
         llm = JudgeStub({})
-        llm.chat_json = lambda *a, **k: json.dumps({"action": "수건을 받는다.", "dialogue": "…소파에서 잘게.",
+        llm.chat_json = lambda *a, **k: json.dumps({"action": "계단을 올라 2층 문을 연다. 수건을 받는다.", "dialogue": "…소파에서 잘게.",
                                                     "motion_id": None, "emotion": "평온", "location": location},
                                                    ensure_ascii=False)
         return engine(llm).reply({"stage": 3, "pending_event": pending}, "(수건을 건넨다)", [], [])

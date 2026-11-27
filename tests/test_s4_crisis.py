@@ -80,7 +80,7 @@ class CrisisStartTest(unittest.TestCase):
     def test_reveal_turn_is_not_judged(self):
         r = judge({"stage": 4, "affection": 60, "stage_user_msgs": 6, "route": "care", "used_events": {"ROUTE_ALLEY": 1}})
         st = dict(r["state"], pending_event=None)
-        st = judge(st, "가지 마", flags=["sincere"])["state"]  # 소식을 꺼낸 답장을 판정하는 차례
+        st = engine(Stub({"flags": ["sincere"]})).judge(st, "가지 마", "*난간에 앉는다.* " + START["care"])["state"]  # 소식을 꺼낸 답장을 판정하는 차례
         self.assertEqual((st["stage"], st["crisis"], st["crisis_msgs"]), (5, "on", 0))
         st = judge(st, "가지 마", flags=["sincere"])["state"]
         self.assertEqual((st["stage"], st["crisis"]), (6, "done"))
@@ -91,7 +91,7 @@ class CrisisWinTest(unittest.TestCase):
         r = engine(Stub({"flags": ["pursue"]})).judge(on("tease"), "가지 마.", "*고개를 든다.* " + WON["tease"])
         st = r["state"]
         self.assertEqual((st["stage"], st["crisis"], r["pending_event"], st["won_line"]), (6, "done", "STAGE_UP_6", None))
-        self.assertFalse(st["judge_soon"])
+        self.assertTrue(st["judge_soon"])  # S6: 상징 장면(STAGE_UP_6) 답장을 바로 판정해 확인
         s = system_for(st)
         self.assertIn(STAGE_UP_6, s)
         self.assertNotIn(WON["tease"], s)  # 같은 답장에 이미 나왔으니 다시 넣지 않음

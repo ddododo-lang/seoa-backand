@@ -175,6 +175,7 @@ class PromptStub(Stub):
 
 
 WON_CARE = "*난간에서 내려온다.* …내려가자. 같이."
+NEWS = "*휴대폰 화면을 끈다.* 태오야. 큰 건. 도시 밖. …새벽에 떠나래."  # S6: 위기 소식 답장(두 갈래 확인 기준을 모두 포함)
 RECONCILE = "*몸을 돌린다.* …늦었잖아. 그래도, 왔으니까."
 
 
@@ -196,7 +197,7 @@ class CrisisJudgeTest(unittest.TestCase):  # B1
     def test_sincere_before_crisis_does_not_win(self):
         st = crisis_start()
         self.assertEqual((st["stage"], st["crisis"]), (5, "on"))
-        _, st = step(st, "가지 마", flags=["sincere"])  # 소식 답장을 판정하는 차례(그 전 메시지)
+        _, st = step(st, "가지 마", NEWS, flags=["sincere"])  # 소식 답장을 판정하는 차례(그 전 메시지)
         self.assertEqual((st["stage"], st["crisis_msgs"]), (5, 0))
         _, st = step(st, "가지 마", flags=["pursue"])
         self.assertEqual(st["stage"], 6)
@@ -215,7 +216,7 @@ class CrisisJudgeTest(unittest.TestCase):  # B1
 
     def test_won_line_already_shown_counts(self):
         st = crisis_start()
-        _, st = step(st, "응")
+        _, st = step(st, "응", NEWS)
         r = engine(Stub()).judge(st, "…있어 줘", WON_CARE)  # 판정 flags 가 비어도 성공 대사가 나왔으면 성공
         self.assertEqual((r["state"]["stage"], r["state"]["won_line"], r["pending_event"]), (6, None, "STAGE_UP_6"))
 
@@ -228,7 +229,7 @@ class CrisisJudgeTest(unittest.TestCase):  # B1
 
     def test_six_fail_then_rift(self):
         st = crisis_start()
-        _, st = step(st, "응")
+        _, st = step(st, "응", NEWS)
         for _ in range(2):
             r, st = step(st)
         self.assertEqual((st["crisis"], r["pending_event"], st["rift_sorry"]), ("rift", "RIFT_START", False))

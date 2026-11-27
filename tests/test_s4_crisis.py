@@ -80,7 +80,7 @@ class CrisisStartTest(unittest.TestCase):
     def test_reveal_turn_is_not_judged(self):
         r = judge({"stage": 4, "affection": 60, "stage_user_msgs": 6, "route": "care", "used_events": {"ROUTE_ALLEY": 1}})
         st = dict(r["state"], pending_event=None)
-        st = judge(st, "가지 마", flags=["sincere"])["state"]  # 소식을 꺼낸 답장을 판정하는 차례
+        st = engine(Stub({"flags": ["sincere"]})).judge(st, "가지 마", "*난간에 앉는다.* " + START["care"])["state"]  # 소식을 꺼낸 답장을 판정하는 차례
         self.assertEqual((st["stage"], st["crisis"], st["crisis_msgs"]), (5, "on", 0))
         st = judge(st, "가지 마", flags=["sincere"])["state"]
         self.assertEqual((st["stage"], st["crisis"]), (6, "done"))

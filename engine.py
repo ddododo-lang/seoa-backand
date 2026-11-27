@@ -118,6 +118,8 @@ HINT_LOOKBACK = 6          # /chat: 최근 서아 답장 이만큼에 그 줄이
 CRISIS_STATES = ("none", "on", "rift", "done")
 CRISIS_EVENTS = {"CRISIS", "RIFT_START", "RECONCILE_OPEN"}
 CRISIS_LOCATIONS = {"tease": "네온 골목", "care": "바 옥상"}
+CRISIS_NEWS_KEYS = {"tease": "새벽에떠나래", "care": "새벽에떠나"}  # S6: 판정한 답장(공백 뺌)에 이게 있어야 위기 소식이 나간 것
+CRISIS_NEWS_TRIES = 3      # S6: 소식이 안 나오면 CRISIS 를 다시 넣는 횟수 상한(첫 답장 포함). 넘으면 나간 것으로 보고 진행(무한 미룸 방지)
 CRISIS_HINT_MSGS = 3       # 위기 유저 메시지 3개째 뒤 HINT_5
 CRISIS_MAX_MSGS = 6        # 위기 유저 메시지 6개가 지나도록 마음 확인이 없으면 엇갈림
 RIFT_AFFECTION = 40        # 엇갈림이 되면 호감
@@ -251,6 +253,7 @@ def new_state() -> dict:
         "rift_sorry": False,      # S4-1: 엇갈림이 된 뒤 유효한 사과·진심을 받아 둠(화해의 문 뒤에 반영, withdraw 면 지움)
         "photo_ask_v": 0,         # S5: 앱이 사진 제안을 지원하면 1 (앱이 보냄, 서버는 돌려보내기만)
         "photo_asks": [],         # S5: 앱이 이미 보여 준 사진 제안 id (photo_3·photo_6). 앱이 기록, 서버는 돌려보내기만
+        "crisis_news": False,     # S6: 위기 소식(새벽에 떠나) 답장이 실제로 나간 것을 판정이 확인함. 그 전에는 마음 확인·셈 없음
     }
 
 
@@ -370,6 +373,15 @@ def normalize_state(raw: dict | None) -> dict:
         elif state["stage"] == 6:
             state["crisis"] = "done"
     state["rewind_offer"] = state["rewind_offer"] is True
+    if "crisis_news" in raw:
+        state["crisis_news"] = raw["crisis_news"] is True
+    else:  # S6 전 저장: 소식 답장을 판정한 차례가 지났으면 이미 나간 것으로
+        used = state["used_events"] if isinstance(state["used_events"], dict) else {}
+        try:
+            state["crisis_news"] = state["crisis"] == "on" and ("CRISIS" not in used or (
+                state["pending_event"] != "CRISIS" and state["turn"] >= int(used["CRISIS"]) + 2))
+        except (TypeError, ValueError):
+            state["crisis_news"] = False
     state["rift_sorry"] = state["rift_sorry"] is True and state["crisis"] == "rift"
     if state["won_line"] not in WON_KEYS:
         state["won_line"] = None
@@ -941,7 +953,7 @@ class Engine:
             return [self.blocks[state["won_line"]]]
         if crisis == "on" and state["stage"] == 5:
             parts = [self.blocks[f"CRISIS_{route}"]]
-            if event != "CRISIS":  # 소식을 꺼내는 답장은 유저가 아직 그 소식을 모름
+            if event != "CRISIS" and state.get("crisis_news"):  # S6: 소식이 나간 것을 확인한 뒤에만(그 전의 진심은 성공이 아님)
                 lines = self.blocks["CRISIS_WATCH"].split("\n")
                 parts.append("\n".join([x for x in lines if not x.startswith("[")]
                                        + [x.split("] ", 1)[1] for x in lines if x.startswith(f"[{route.lower()}] ")]))
@@ -1094,13 +1106,9 @@ class Engine:
         shown = re.sub(r"\s+", "", last_reply or "")
         route = state["route"] or "care"
         if state["crisis"] == "on":
-            post = self._event_after(state, "CRISIS", n_msgs, fallback)
-            if post < 0:
-                state["pending_event"], used["CRISIS"] = "CRISIS", turn
-                changes.append("위기 소식 답장이 예비 지문 → 다음 답장에 다시")
-                return
+            post = self._crisis_news(state, shown, n_msgs, fallback, changes)
             if not post:
-                return  # 소식을 꺼낸 답장을 판정하는 차례: 유저가 아직 그 소식에 답하지 않음
+                return  # 소식이 아직 안 나갔거나(다시 넣음), 소식을 꺼낸 답장을 판정하는 차례
             state["crisis_msgs"] += post
             won = f"WON_{route.upper()}"
             if flags & {"sincere", "pursue"} or self._won_shown(won, shown):
@@ -1156,6 +1164,38 @@ class Engine:
         elif (not state["stage_hints"] and not state["rift_sorry"]
               and state["crisis_msgs"] - state["hint_msgs"] >= RECONCILE_HINT_MSGS):
             self._set_hint(state, "HINT_6", state["crisis_msgs"], changes)
+
+    @staticmethod
+    def _crisis_news(state: dict, shown: str, n_msgs: int, fallback: bool, changes: list[str]) -> int:
+        """S6: 위기 소식 답장이 실제로 나갔는지 판정한 답장(last_reply)으로 확인. 소식 뒤에 온 유저 메시지 수를 돌려줌.
+        아직 안 나갔으면 CRISIS 를 다시 예약하고 0(셈·성공 판정 없음). 묶음(메시지 여럿)이면 마지막 답장만 보이므로
+        소식이 안 보여도 첫 답장에 나간 것으로 봄(예전 방식, 중복 방지)."""
+        used, turn = state["used_events"], state["turn"]
+        if state["pending_event"] == "CRISIS":
+            used["CRISIS"] = turn  # 예약만 됨: 앱이 아직 소식 답장을 내지 않음
+            return 0
+        if state["crisis_news"]:
+            return n_msgs
+        if not n_msgs:
+            return 0
+        key = CRISIS_NEWS_KEYS[state["route"] or "care"]
+        if key in shown:
+            state["crisis_news"] = True
+            changes.append("위기 소식이 나감 (이번 답장)")
+            return 0  # 이번 묶음의 말은 모두 소식 전
+        if n_msgs > 1 and not fallback:
+            state["crisis_news"] = True
+            changes.append("위기 소식: 묶음이라 첫 답장에 나간 것으로 봄")
+            return n_msgs - 1
+        tries = int(used.get("CRISIS_TRY") or 1)
+        if tries >= CRISIS_NEWS_TRIES:
+            state["crisis_news"] = True
+            changes.append(f"위기 소식이 {tries}번 안 나옴 → 나간 것으로 보고 진행")
+            return 0
+        used["CRISIS_TRY"] = tries + 1
+        state["pending_event"], used["CRISIS"] = "CRISIS", turn
+        changes.append("위기 소식이 답장에 없음 → 다음 답장에 다시 (셈·성공 판정 없음)")
+        return 0
 
     @staticmethod
     def _rift_night_started(state: dict) -> bool:
@@ -1586,6 +1626,8 @@ class Engine:
         if nxt == 5:  # S4: 그 골목에 이어 같은 밤, 서아가 새벽에 떠난다는 소식을 꺼냄 (DEPARTURE 대신)
             state["pending_event"] = "CRISIS"
             state["crisis"], state["crisis_msgs"], state["rift_sorry"] = "on", 0, False
+            state["crisis_news"] = False
+            state["used_events"].pop("CRISIS_TRY", None)
             state["used_events"]["CRISIS"] = state["turn"]  # 소식을 꺼낸 답장을 판정하는 차례는 셈하지 않음
             changes.append("위기: 새벽에 떠난다는 소식 (CRISIS)")
         if nxt == 6:

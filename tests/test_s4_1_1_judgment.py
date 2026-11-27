@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from engine import RIFT_JUDGE_NOTE, SCENE_REPLIES_DONE, normalize_state  # noqa: E402
-from test_s4_1_story import RECONCILE, crisis_start, night2, rift_night, step  # noqa: E402
+from test_s4_1_story import NEWS, RECONCILE, crisis_start, night2, rift_night, step  # noqa: E402
 from test_story_routes import REPLY, Stub, engine, judge, system_for  # noqa: E402
 
 DOOR = {"CRISIS": 5, "RIFT_START": 12, "RECONCILE_OPEN": 15}  # 화해의 문을 연 답장은 이미 판정함
@@ -111,7 +111,7 @@ class ReplyOkTest(unittest.TestCase):  # B
 class WonLineCheckTest(unittest.TestCase):  # C
     def test_partial_line_keeps_won_line(self):  # 10
         st = crisis_start("care")
-        _, st = step(st, "응")
+        _, st = step(st, "응", NEWS)
         r = engine(Stub({"flags": ["pursue"]})).judge(st, "가지 마", "*일어선다.* 이제 내려가자.")  # 「같이」 없음
         self.assertEqual((r["state"]["stage"], r["state"]["won_line"]), (6, "WON_CARE"))
         self.assertIn("…내려가자. 같이.", system_for(r["state"]))
@@ -120,12 +120,12 @@ class WonLineCheckTest(unittest.TestCase):  # C
 
     def test_full_line_not_repeated(self):  # 11
         st = crisis_start("care")
-        _, st = step(st, "응")
+        _, st = step(st, "응", NEWS)
         r = engine(Stub({"flags": ["pursue"]})).judge(st, "가지 마", "*난간에서 내려온다.* …내려가자. 같이.")
         self.assertEqual((r["state"]["stage"], r["state"]["won_line"]), (6, None))
         self.assertNotIn("…내려가자. 같이.", system_for(r["state"]))
         st = crisis_start("tease")
-        _, st = step(st, "응")
+        _, st = step(st, "응", NEWS)
         r = engine(Stub({"flags": ["pursue"]})).judge(st, "가지 마", "*고개를 든다.* …연기 아니지. 이번엔.")
         self.assertEqual(r["state"]["won_line"], None)
         self.assertEqual(normalize_state({"won_line": "WON_CARE"})["won_line"], "WON_CARE")  # 블록 이름 검증은 그대로

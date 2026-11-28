@@ -102,7 +102,7 @@ class FlowerTest(unittest.TestCase):
         _, st = step(alley_last(gift_moments=without("flower")), "응", REPLY)
         self.assertIsNone(gid(dict(st, gift_moments=without("flower"))))
         _, st = step(dict(st, gift_moments=without("flower")), "응", REPLY)
-        self.assertNotIn(MOMENT_AFTER_ALLEY, st["used_events"])  # 그 답장 한 번뿐
+        self.assertIn(MOMENT_AFTER_ALLEY, st["used_events"])  # S8-1: 열릴 때까지 차례가 남음
         self.assertNotIn("MOMENT_flower", st["used_events"])
 
     def test_crisis_same_judge_umbrella_first(self):
@@ -111,11 +111,11 @@ class FlowerTest(unittest.TestCase):
         self.assertEqual(gid(dict(st, pending_event="CRISIS")), "umbrella")
         _, st = step(st, "응", NEWS)
         self.assertIn("MOMENT_umbrella", st["used_events"])
-        self.assertIn(MOMENT_AFTER_ALLEY, st["used_events"])  # 소식 답장은 우산이 차지 → 열쇠는 다음 답장
-        self.assertEqual(gid(st), "flower")
+        self.assertIn(MOMENT_AFTER_ALLEY, st["used_events"])
+        self.assertIsNone(gid(st))  # S8-1: 위기 중에는 열쇠를 열지 않고 기다림(tests/test_s8_1_fixes.py)
         _, st = step(st, "가지 마", "*고개를 숙인다.* …")
-        self.assertIn("MOMENT_flower", st["used_events"])
-        self.assertNotIn(MOMENT_AFTER_ALLEY, st["used_events"])
+        self.assertNotIn("MOMENT_flower", st["used_events"])
+        self.assertIn(MOMENT_AFTER_ALLEY, st["used_events"])
 
 
 class UmbrellaTest(unittest.TestCase):
@@ -190,7 +190,10 @@ class PriorityTest(unittest.TestCase):
     def test_recent_gift_quiet(self):
         history = [{"r": "u", "t": "[유저가 선물함: 구급상자] · 순간 선물"}, {"r": "c", "t": "…고마워."}]
         out = engine(Stub()).reply(dict(storm(), gift_moments=M), "응", history, [])
-        self.assertIsNone(out["gift_moment"])  # 방금 순간 선물을 줬으면 쉼(앱 목록이 비워짐)
+        self.assertEqual(out["gift_moment"]["id"], "towel")  # S8-1: 장면 선물은 「방금 줘서 쉼」에 안 막힘
+        out = engine(Stub(reply={"gift_moment": {"id": "firstaid", "reason": "x"}})).reply(
+            dict(storm(), gift_moments=without("towel")), "응", history, [])
+        self.assertIsNone(out["gift_moment"])  # 모델이 스스로 여는 경로는 쉼을 지킴
 
     def test_other_moments_unchanged(self):
         self.assertEqual(set(MOMENT_SCENES), {"towel", "flower", "umbrella", "ring"})

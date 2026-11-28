@@ -45,6 +45,11 @@ NAME_EVENT_KEYS = {  # 이 원고 대사가 판정한 답장(last_reply)에 이�
 NAME_QUIET_MSGS = 3  # 이름 사건을 정한 판정 뒤 유저 메시지 이만큼은 무작위 사건 없음
 NAME_WATCH_LINES = {"asked": "asked", "accepted": "asked", "refused": "refused", "forgiven": "forgiven"}  # name_state → NAME_WATCH 줄
 NAME_STRIP = re.compile(r'[\r\n{}"「」]')
+# 이름 구분: 유저 이름이 등장인물 이름과 같을 때 서아에게 알려 주는 줄, 지문에 「○○ 씨」가 나오면 「당신」으로
+CHARACTER_NAMES = ("서아", "윤서아", "마리", "태오", "강태오")
+NAME_CLASH_NOTE = ("# 이름 구분\n- 유저 이름이 「{name}」로, 이 이야기의 인물 {who}와 같다. 지문에서 「{who}」는 언제나 인물 {who}이고, "
+                   "유저는 언제나 「당신」이다. 대사에서 유저를 이름으로 부를 때는 「{name} 씨」로 불러 {who}와 헷갈리지 않게 한다.")  # 인물 이름은 모두 받침 없음
+DANGSIN_JOSA = {"가": "이", "는": "은", "를": "을", "와": "과", "랑": "이랑", "로": "으로"}
 NAME_CALL = {  # STATE_BLOCK 「이름 부르기」
     "none": "아직 안 부름", "asked": "아직 안 부름",
     "accepted": "진지한 순간에 이름", "forgiven": "진지한 순간에 이름",
@@ -235,6 +240,7 @@ SUMMARY_SYSTEM = (
     "너는 롤플레이 대화 요약기다. 기존 요약과 새 대화를 합쳐 하나의 요약으로 만든다. "
     "중요한 사건, 관계 변화, 서아가 한 약속이나 고백, 유저가 기억해야 할 디테일을 포함한다. "
     "유저가 자기 이름을 말했으면 「유저 이름: ○○」을 꼭 남긴다. "
+    "요약문에서 유저는 「유저」, 캐릭터는 「서아」로만 쓴다(「당신」「나」「너」「그녀」로 쓰지 않는다). "
     "서아가 직접 한 제안·약속·발언과 유저의 고백·약속을 가장 먼저 남긴다. "
     "한국어로 10문장 이내, 요약문만 출력한다."
 )
@@ -311,6 +317,28 @@ def clean_user_name(raw) -> str:
     if not isinstance(raw, str):
         return ""
     return NAME_STRIP.sub("", raw).strip()[:NAME_MAX_LEN].strip()
+
+
+def name_clash_note(name: str) -> str | None:
+    """유저 이름이 등장인물 이름과 같으면 서아에게 알려 주는 줄. 아니면 None."""
+    key = re.sub(r"\s+", "", name or "")
+    if key not in CHARACTER_NAMES:
+        return None
+    who = "서아" if key.endswith("서아") else key[-2:]
+    return NAME_CLASH_NOTE.format(name=name, who=who)
+
+
+def name_out_of_action(action: str | None, name: str) -> str | None:
+    """지문에 「○○ 씨」(유저 이름 + 씨)가 나오면 「당신」으로 바꾼다(조사도 맞춤). 지문에서 유저는 언제나 「당신」.
+    이름만 나온 경우는 바꾸지 않는다: 「하늘」 같은 이름이 「하늘이 밝아 온다」까지 바꿀 수 있어서."""
+    if not action or not name:
+        return action
+
+    def swap(m: re.Match) -> str:
+        josa = m.group(1) or ""
+        return "당신" + DANGSIN_JOSA.get(josa, josa)
+
+    return re.sub(re.escape(name) + r"\s*씨(가|는|를|와|랑|로|의|에게|한테|도|만|께)?(?![가-힣])", swap, action) if "씨" in action else action
 
 
 def name_josa(name: str) -> str:
@@ -650,6 +678,7 @@ class Engine:
                 scene_gift = self._scene_moment(state, event, night)  # S8: 정해진 장면이면 그 선물이 우선
                 if scene_gift and not (out["gift_moment"] and out["gift_moment"]["id"] == scene_gift):
                     out["gift_moment"] = self._gift_moment({"id": scene_gift}, state["_scene_gifts"])
+                out["action"] = name_out_of_action(out["action"], state.get("user_name") or "")  # 지문의 「○○ 씨」 → 「당신」
                 if event in DAY_MARKERS:  # 남은 날 지문은 모델에 맡기지 않고 그대로 앞에 붙임
                     out["action"] = f"{DAY_MARKERS[event]} {out['action'] or ''}".strip()
                 moved = any(w in (out["action"] or "") for w in MOVE_WORDS)  # S6: 이동 대목이 있을 때만 서버가 채움
@@ -1079,6 +1108,11 @@ class Engine:
         return values
 
     def _build_system(self, state: dict, event: str | None, motion_list: list[dict] | None = None) -> str:
+        system = self._build_system_core(state, event, motion_list)
+        note = name_clash_note(state.get("user_name") or "")
+        return f"{system}\n\n{note}" if note else system
+
+    def _build_system_core(self, state: dict, event: str | None, motion_list: list[dict] | None = None) -> str:
         values = self._values(state)
         lines = [
             f"{m.get('id')} {m.get('name')} ({m.get('emo')})"

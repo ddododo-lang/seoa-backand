@@ -150,7 +150,7 @@ class DateAndKeyTest(unittest.TestCase):  # A5·A6
 
     def test_key_instead_of_flowers(self):
         gift = engine().blocks["GIFT_MOMENT"]
-        self.assertIn("4단계 그 골목·처음 이름을 부를 때(바 여분 열쇠)", gift)
+        self.assertIn("그 골목 이야기를 마친 뒤(바 여분 열쇠)", gift)  # S8: 때를 장면에 맞춤
         self.assertNotIn("꽃다발", gift)
 
 

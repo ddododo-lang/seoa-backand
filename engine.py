@@ -176,6 +176,16 @@ RIFT_JUDGE_NOTE = ("[엇갈림 판정] 위기에서 엇갈려 서아가 거리�
 GIFT_MOMENT_GAP = 10       # 같은 순간 선물은 준 뒤 유저 메시지 이만큼 지나야 다시 엶
 FIRST_NIGHT_TURNS = 3     # 첫날 밤 사정(손등의 피)은 유저 메시지 이만큼까지만 넣음. 그 뒤엔 같은 묘사가 반복되지 않게 뺌
 GIFT_MOMENT_QUIET = 3      # 순간 선물을 준 뒤 이만큼은 어떤 순간 선물도 열지 않음(자주 넣지 않기)
+# S8: 정해진 장면 답장에서는 서버가 순간 선물을 확실히 엶(본편만). 선물 id → 그 답장(「[다음 밤]」 첫마디·사건·ALLEY_DONE)
+# 앱이 보낸 gift_moments 에 그 id 가 있을 때만, 같은 선물은 한 번(used_events.MOMENT_{id}). 모델이 스스로 내는 경로는 그대로
+MOMENT_SCENES = {
+    "towel": ("NIGHT_START_3_TEASE", "NIGHT_START_3_CARE", "STORM"),
+    "flower": ("ALLEY_DONE",),   # 그 골목(ALLEY) 장면이 「마침」이 된 판정 바로 다음 답장
+    "umbrella": ("CRISIS",),     # 위기 소식 답장(소식이 확인될 때까지 다시 넣는 답장마다)
+    "ring": ("LOVERS_ASK",),     # 서아가 관계를 묻는 답장(S7 원고 1절)
+}
+MOMENT_AFTER_ALLEY = "MOMENT_DUE_flower"  # used_events: ALLEY 마침 뒤 다음 답장에 flower 를 열 차례
+RING_GIFT = "반지"  # 앱 목록에 ring 이 없을 때(이미 줌) 「[유저가 선물함: 반지]」를 알아볼 이름
 # 조연 (앱 54): 갈래마다 한 명, 나올 때마다 한 걸음씩(처음 1 → 두 번째 2 → 마무리 3)
 SIDE_CHARS = ("MARI", "TAEO")
 SIDE_STEP_KEYS = ("mari_step", "taeo_step")
@@ -321,6 +331,9 @@ def judge_soon(state: dict) -> bool:
         return True
     if state.get("episode"):
         return False
+    used = state.get("used_events") if isinstance(state.get("used_events"), dict) else {}
+    if MOMENT_AFTER_ALLEY in used:
+        return True  # S8: 골목 뒤 순간 선물(flower)은 다음 답장 한 번만 → 그 답장을 바로 판정
     if state.get("lovers") == "ask":
         return True  # S7: 물음 답장·대답을 바로 판정
     if state.get("lovers") == "wait":
@@ -330,7 +343,6 @@ def judge_soon(state: dict) -> bool:
     scene = state.get("scene")
     if scene in EVENT_LOCATIONS and state.get("location") != EVENT_LOCATIONS[scene] and not state.get("night_next"):
         return True  # S6: 장소를 옮기는 장면이 아직 그곳에 못 감 → 답장마다 판정해 「세 번째 답장」을 바로 셈
-    used = state.get("used_events") if isinstance(state.get("used_events"), dict) else {}
     return state.get("crisis") == "on" or (state.get("crisis") == "rift" and "RECONCILE_OPEN" in used)
 
 
@@ -616,6 +628,9 @@ class Engine:
             if data and str(data.get("dialogue") or "").strip():
                 out = self._validate_reply(data, ids, allowed_locations(state))
                 out["gift_moment"] = self._gift_moment(data.get("gift_moment"), state["gift_moments"])
+                scene_gift = self._scene_moment(state, event, night)  # S8: 정해진 장면이면 그 선물이 우선
+                if scene_gift and not (out["gift_moment"] and out["gift_moment"]["id"] == scene_gift):
+                    out["gift_moment"] = self._gift_moment({"id": scene_gift}, state["gift_moments"])
                 if event in DAY_MARKERS:  # 남은 날 지문은 모델에 맡기지 않고 그대로 앞에 붙임
                     out["action"] = f"{DAY_MARKERS[event]} {out['action'] or ''}".strip()
                 moved = any(w in (out["action"] or "") for w in MOVE_WORDS)  # S6: 이동 대목이 있을 때만 서버가 채움
@@ -714,6 +729,87 @@ class Engine:
                     return len(users) - 1 - i < GIFT_MOMENT_GAP
             return False
         return [g for g in moments if not recent(g["name"])]
+
+    @staticmethod
+    def _scene_keys(state: dict, event: str | None, night: str | None) -> list[str]:
+        """S8: 이 답장의 장면(「[다음 밤]」 첫마디 또는 사건), 그다음 골목 뒤 차례(ALLEY_DONE). 앞이 우선."""
+        keys = [night or event or ""]
+        if MOMENT_AFTER_ALLEY in state["used_events"]:
+            keys.append("ALLEY_DONE")
+        return keys
+
+    @classmethod
+    def _scene_moment(cls, state: dict, event: str | None, night: str | None) -> str | None:
+        """S8: 이 답장이 MOMENT_SCENES 의 장면이고 그 선물이 앱 목록(이번에 열 수 있는 것)에 있고 아직 연 적이 없으면 그 id."""
+        if state["episode"]:
+            return None
+        ids, used = {g["id"] for g in state["gift_moments"]}, state["used_events"]
+        for key in cls._scene_keys(state, event, night):
+            for gid, scenes in MOMENT_SCENES.items():
+                if key in scenes and gid in ids and f"MOMENT_{gid}" not in used:
+                    return gid
+        return None
+
+    @staticmethod
+    def _moment_opened(state: dict, gid: str, changes: list[str]) -> None:
+        """S8: 판정이 장면 답장이 나간 것을 보면, 그 선물이 앱 목록에 있었을 때(열렸을 때) MOMENT_{id} 로 기록 → 다시 열지 않음."""
+        used = state["used_events"]
+        if state["episode"] or f"MOMENT_{gid}" in used or gid not in {g["id"] for g in state["gift_moments"]}:
+            return
+        used[f"MOMENT_{gid}"] = state["turn"]
+        changes.append(f"순간 선물 {gid}: 장면 답장에서 엶 (다시 열지 않음)")
+
+    @classmethod
+    def _moments_seen(cls, state: dict, next_night: bool, n_msgs: int, fallback: bool, changes: list[str]) -> None:
+        """S8: 판정 첫머리(상태를 바꾸기 전). 이번 묶음에 「[다음 밤]」 첫마디·STORM 시작 답장이 있었으면 towel 을 기록하고,
+        골목 뒤 차례(flower)는 이번 묶음에서 끝냄(한 번). 묶음이 다른 장면 선물 답장 하나뿐이면 flower 는 그다음 답장으로 미룸.
+        umbrella·ring 은 위기 소식·연인 물음이 답장에 나온 것을 확인할 때 기록(_crisis_news·_lovers)."""
+        if state["episode"]:
+            return
+        used, turn = state["used_events"], state["turn"]
+        keys = []
+        if next_night and state["night_next"]:
+            keys.append(state["night_next"])
+        storm_at = used.get("STORM")
+        if (n_msgs and not (fallback and n_msgs == 1) and state["pending_event"] != "STORM" and storm_at is not None
+                and storm_at == turn - (1 if used.get("ROUTE_STORM") == storm_at else 0)):
+            keys.append("STORM")  # 갈래 STORM 은 정한 판정의 turn(그 뒤 +1), 무작위 STORM(6단계)은 +1 한 뒤의 turn 으로 기록됨
+        for gid, scenes in MOMENT_SCENES.items():
+            if any(k in scenes for k in keys):
+                cls._moment_opened(state, gid, changes)
+        if MOMENT_AFTER_ALLEY not in used or not n_msgs:
+            return
+        if cls._crisis_reply_judged(state):
+            keys.append("CRISIS")
+        if cls._ask_reply_judged(state):
+            keys.append("LOVERS_ASK")
+        ids = {g["id"] for g in state["gift_moments"]}
+        taken = [gid for gid, scenes in MOMENT_SCENES.items()
+                 if gid != "flower" and gid in ids and any(k in scenes for k in keys)
+                 and used.get(f"MOMENT_{gid}", turn) == turn]  # 이번 판정에 막 기록했거나 아직 안 연 것
+        if n_msgs == 1 and taken:
+            return  # 그 한 답장은 다른 장면 선물이 차지함 → 골목 뒤 선물은 다음 답장
+        used.pop(MOMENT_AFTER_ALLEY, None)
+        cls._moment_opened(state, "flower", changes)
+
+    @staticmethod
+    def _crisis_reply_judged(state: dict) -> bool:
+        """S8: 이번 판정이 위기 소식 답장(CRISIS)을 판정하는 차례인지(소식 확인 전, 예약이 아님)."""
+        return (state["stage"] == 5 and state["crisis"] == "on" and not state["crisis_news"]
+                and state["pending_event"] != "CRISIS" and "CRISIS" in state["used_events"])
+
+    @staticmethod
+    def _ask_reply_judged(state: dict) -> bool:
+        """S8: 이번 판정이 연인 물음 답장(LOVERS_ASK)을 판정하는 차례인지."""
+        used = state["used_events"]
+        return (state["lovers"] == "ask" and state["pending_event"] != "LOVERS_ASK" and "LOVERS_ASK" in used
+                and state["turn"] < used["LOVERS_ASK"] + 2)
+
+    @staticmethod
+    def _ring_given(state: dict, msgs: list[str]) -> bool:
+        """S8: 유저가 반지를 순간 선물로 건넴(「[유저가 선물함: 반지]」 · 순간 선물)."""
+        names = {g["name"] for g in state["gift_moments"] if g["id"] == "ring" and g["name"]} | {RING_GIFT}
+        return any("순간 선물" in m and any(f"[유저가 선물함: {n}" in m for n in names) for m in msgs)
 
     @staticmethod
     def _gift_moment(raw, moments: list[dict]) -> dict | None:
@@ -846,6 +942,7 @@ class Engine:
         progress = None
         fallback = (last_reply or "").strip() in FALLBACK_TEXTS  # S4-1: 판정한 답장이 예비 지문
         changes: list[str] = []
+        self._moments_seen(state, next_night, len(msgs), fallback, changes)  # S8: 상태를 바꾸기 전에 이번 묶음의 장면을 봄
         if not state["episode"]:  # 대화량 점수·메시지 수는 본 이야기만
             state["name_quiet"] = max(0, min(NAME_QUIET_MSGS, state["name_quiet"]) - len(msgs))
             judge["talk_bonus"] = max(0, min(self._talk_bonus(msgs, judge), TALK_BONUS_STAGE_MAX - state["stage_bonus"]))
@@ -868,6 +965,10 @@ class Engine:
                 state["night_wait"] += len(msgs)
                 if state["night_wait"] >= NIGHT_WAIT_MAX:
                     self._next_night(state, changes, f"「{NEXT_NIGHT}」 없이 메시지 {state['night_wait']}개")
+        if (not state["episode"] and stage_before == 5 and state["lovers"] in ("ask", "wait")
+                and "lovers_yes" not in judge["flags"] and self._ring_given(state, msgs)):
+            judge["flags"] = list(judge["flags"]) + ["lovers_yes"]  # S8: 관계를 물은 뒤 반지를 건넴 = 받아 줌
+            changes.append("연인 확정: 반지를 건넴 → lovers_yes")
         if not state["episode"] and stage_before == 5 and state["lovers"] in ("ask", "wait"):
             self._lovers(state, judge, last_reply, len(msgs), changes, fallback)  # S7 연인 확정
         elif not state["episode"] and stage_before == 5:
@@ -1120,6 +1221,8 @@ class Engine:
         if state["scene_msgs"] >= SCENE_REPLIES_DONE:
             state["scene"], state["scene_judges_left"], state["scene_msgs"] = None, 0, 0
             changes.append(f"갈래 장면 마침: {scene}")
+            if scene == "ALLEY" and not state["episode"] and "MOMENT_flower" not in state["used_events"]:
+                state["used_events"][MOMENT_AFTER_ALLEY] = state["turn"]  # S8: 다음 답장에 골목 뒤 순간 선물(flower)
 
     @staticmethod
     def _drop_scene(state: dict, changes: list[str], why: str) -> None:
@@ -1315,6 +1418,7 @@ class Engine:
         key = CRISIS_NEWS_KEYS[state["route"] or "care"]
         if key in re.sub(r"\s+", "", last_reply or ""):
             state["crisis_news"] = True
+            Engine._moment_opened(state, "umbrella", changes)  # S8: 소식 답장과 함께 열린 우산
             rows = [x for x in (last_reply or "").split("\n") if x.strip()]
             at = next((i for i, x in enumerate(rows) if key in re.sub(r"\s+", "", x)), len(rows))
             post = len(rows) - 1 - at if len(rows) == n_msgs else 0
@@ -1323,6 +1427,7 @@ class Engine:
         tries = int(used.get("CRISIS_TRY") or 1)
         if tries >= CRISIS_NEWS_TRIES:
             state["crisis_news"] = True
+            Engine._moment_opened(state, "umbrella", changes)
             changes.append(f"위기 소식이 {tries}번 안 나옴 → 나간 것으로 보고 진행")
             return 0
         used["CRISIS_TRY"] = tries + 1
@@ -1420,6 +1525,8 @@ class Engine:
                     changes.append("연인 확정 물음이 답장에 없음 → 다음 답장에 다시")
                     return
                 changes.append(f"연인 확정 물음이 {tries}번 안 나옴 → 나간 것으로 보고 진행")
+            if first:
+                self._moment_opened(state, "ring", changes)  # S8: 물음 답장과 함께 열린 반지
             if yes:  # 물음 답장을 판정하는 차례의 한 메시지는 묻기 전의 말 → 유저가 먼저 사귀자고 함(3절)
                 self._lovers_done(state, "LOVERS_PROPOSED" if first and post <= 0 else f"LOVERS_YES_{kind}",
                                   shown, changes)

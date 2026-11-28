@@ -31,6 +31,7 @@
 | `{{stage_name}}` | `티키타카` | 단계 이름 (앱과 같은 이름) |
 | `{{affection}}` | `35` | 호감도 0~100 |
 | `{{day}}` | `3` | 플레이 일차 |
+| `{{night_gap}}` | `하루가 지났다. …` | S9 지난번 밤에서 지난 날(state.night_gap 하루·며칠). 첫날 밤은 줄째 뺌. 본편만 |
 | `{{time_of_day}}` | `새벽 2시` | 현재 시간대 |
 | `{{location}}` | `바 '라스트 오더' 1층` | 현재 장소 |
 | `{{revealed_secrets}}` | `없음` / `비밀1` | 공개된 비밀 |
@@ -204,6 +205,7 @@
 - 단계: {{stage}} ({{stage_name}})
 - 호감도: {{affection}} / 100
 - 일차: {{day}}일째, {{time_of_day}}
+- 지난번 밤에서: {{night_gap}}
 - 장소: {{location}}
 - 공개된 비밀: {{revealed_secrets}}
 - 출발까지 남은 날: {{departure_days_left}}

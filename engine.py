@@ -158,6 +158,10 @@ NIGHT_NEXT = {  # night_next → (시간 카드 문구 night_card, 넘기는 날
     "RIFT_NIGHT": ("며칠 뒤 밤", 3, None),  # 마무리는 RIFT_START 가 대신함
 }
 NIGHT_END_STAGES = (2, 3)
+NIGHT_GAP_LINES = {  # S9 night_gap → STATE_BLOCK 「지난번 밤에서」 (값이 없으면 줄을 뺌, 에피소드에는 없음)
+    "하루": "하루가 지났다. 지난번 밤의 일은 「어제」로 말한다.",
+    "며칠": "며칠이 지났다. 지난번 밤의 일은 「어제」「하루」가 아니라 「며칠 전」「그날」로 말한다.",
+}
 NIGHT_END_AFTER = 8         # S6(임시, 5→8): 상징 장면 답장 다음부터 그 단계 유저 메시지 수 (첫 밤이 너무 빨리 끝남)
 NIGHT_WAIT_MAX = 6          # 예전 앱처럼 「[다음 밤]」이 안 오면 유저 메시지 이만큼 뒤 서버가 밤을 넘김(첫마디 없이)
 NIGHT_LOCATION = "바 '라스트 오더' 1층"
@@ -288,6 +292,7 @@ def new_state() -> dict:
         "night_next": None,       # S4-C: 다음 밤 첫마디 블록(NIGHT_NEXT). 있으면 앱이 마무리에 한 번 답한 뒤 시간 카드 → 「[다음 밤]」
         "night_card": None,       # S4-C: 시간 카드 문구 「2일째 밤」·「며칠 뒤 밤」
         "night_wait": 0,          # S4-C: night_next 를 정한 뒤 「[다음 밤]」 없이 온 유저 메시지 수
+        "night_gap": None,        # S9: 지난번 밤에서 지난 날 「하루」·「며칠」 (밤을 넘길 때 정함, 다음 밤까지 그대로). 첫날 밤은 None
         "scene_msgs": 0,          # S4-1: 열린 갈래 장면에서 정상으로 나간 서아 답장 수(시작 답장 포함). SCENE_REPLIES_DONE 이면 마침
         "rift_sorry": False,      # S4-1: 엇갈림이 된 뒤 유효한 사과·진심을 받아 둠(화해의 문 뒤에 반영, withdraw 면 지움)
         "photo_ask_v": 0,         # S5: 앱이 사진 제안을 지원하면 1 (앱이 보냄, 서버는 돌려보내기만)
@@ -390,6 +395,8 @@ def normalize_state(raw: dict | None) -> dict:
     if state["night_next"] not in NIGHT_NEXT or state["episode"]:
         state["night_next"] = None
     state["night_card"] = NIGHT_NEXT[state["night_next"]][0] if state["night_next"] else None
+    if state["night_gap"] not in NIGHT_GAP_LINES:
+        state["night_gap"] = None
     for key in ("stage_bonus", "stage_user_msgs", "stage_hints", "hint_msgs", "crisis_msgs", "night_wait", "stage_up_msgs"):
         try:
             state[key] = max(0, int(state[key]))
@@ -1096,7 +1103,12 @@ class Engine:
                 self.blocks["OUTPUT_FORMAT"],
             ]
             return "\n\n".join(parts)
-        parts += [self.blocks["MAIN_WORLD"], render(self.blocks["STATE_BLOCK"], values)]
+        main_state = self.blocks["STATE_BLOCK"]
+        if state.get("night_gap") in NIGHT_GAP_LINES:  # S9: 지난번 밤에서 지난 날
+            values["night_gap"] = NIGHT_GAP_LINES[state["night_gap"]]
+        else:  # 첫날 밤 등: 줄을 통째로 뺀다
+            main_state = "\n".join(x for x in main_state.split("\n") if "{{night_gap}}" not in x)
+        parts += [self.blocks["MAIN_WORLD"], render(main_state, values)]
         if state["gift_moments"]:  # 앱 50: 열 수 있는 순간 선물이 있을 때만
             values["gift_moments"] = "\n".join(f"- {g['id']} {g['name']}: {g['when']}" for g in state["gift_moments"])
             parts.append(render(self.blocks["GIFT_MOMENT"], values))
@@ -1494,6 +1506,7 @@ class Engine:
         """「[다음 밤]」: 날짜·시간대·장소를 다음 밤으로, 열려 있던 갈래 장면은 닫음. 엇갈림은 이 밤부터 메시지를 셈."""
         nxt = state["night_next"]
         state["day"] += NIGHT_NEXT[nxt][1]
+        state["night_gap"] = "하루" if NIGHT_NEXT[nxt][1] == 1 else "며칠"  # S9
         state["time_of_day"], state["location"] = "밤", NIGHT_LOCATION
         state["night_next"], state["night_card"], state["night_wait"] = None, None, 0
         Engine._drop_scene(state, changes, "밤 넘기기")
